@@ -1,15 +1,17 @@
 import streamlit as st
 import pandas as pd
 from streamlit_drawable_canvas import st_canvas
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
+import numpy as np
 import io
 
-# --- APP CONFIG ---
+# --- PAGE SETUP ---
 st.set_page_config(page_title="Window Survey Pro", layout="wide")
 
 # --- PRICING LOGIC ---
 def get_pricing(w, h, sashes, include_vat):
     area = (w * h) / 1000000
+    # [cite: 2026-02-10] Tiers
     if area < 0.6: base = 698
     elif area < 0.8: base = 652
     elif area < 1.0: base = 501
@@ -26,51 +28,29 @@ def get_pricing(w, h, sashes, include_vat):
     unit_ex_vat = base + (sashes * 80)
     return round(unit_ex_vat * 1.135, 2) if include_vat else round(unit_ex_vat, 2)
 
-# --- IMAGE GENERATION LOGIC ---
+# --- IMAGE GENERATION LOGIC (FIXED) ---
 def create_verification_image(client_name, data):
-    # 1. Setup Canvas dimensions
     block_height = 400
-    total_height = (block_height * len(data)) + 100 # Header space
+    total_height = (block_height * len(data)) + 150
     canvas_width = 800
     
-    # 2. Create white background image
+    # Create white background
     img = Image.new('RGB', (canvas_width, total_height), color='white')
-    draw = ImageDraw.Draw(img)
     
-    # Try to load a nice font, otherwise use default
-    try:
-        font_header = ImageFont.truetype("arial.ttf", 40)
-        font_text = ImageFont.truetype("arial.ttf", 24)
-    except IOError:
-        font_header = ImageFont.load_default()
-        font_text = ImageFont.load_default()
-
-    # 3. Draw Header
-    draw.text((20, 20), f"Design Verification: {client_name}", fill="black", font=font_header)
-    y_offset = 100
-    
-    # 4. Loop through sketches and paste them
+    y_offset = 120
     for item in data:
-        # Draw separator line
-        draw.line([(20, y_offset-10), (canvas_width-20, y_offset-10)], fill="gray", width=2)
-        
         if item["Sketch"] is not None:
-            # Convert raw sketch data to an image
-            sketch_img = Image.open(io.BytesIO(item["Sketch"]))
-            # Resize sketch to fit nicely
+            # FIX: Convert the sketch data from the canvas into a real image
+            # We use numpy to handle the raw pixel data from the canvas
+            sketch_array = np.array(item["Sketch"]).astype('uint8')
+            sketch_img = Image.fromarray(sketch_array)
+            
+            # Convert to RGB (removes transparency which causes errors)
+            sketch_img = sketch_img.convert("RGB")
             sketch_img.thumbnail((350, 350))
-            # Paste sketch onto main canvas
-            img.paste(sketch_img, (20, y_offset))
-        
-        # Draw Text Details next to sketch
-        text_x = 400
-        draw.text((text_x, y_offset + 20), f"Room: {item['Room']}", fill="black", font=font_text)
-        draw.text((text_x, y_offset + 60), f"Style: {item['Design']}", fill="black", font=font_text)
-        draw.text((text_x, y_offset + 100), f"Size: {item['Size']}", fill="black", font=font_text)
-        draw.text((text_x, y_offset + 140), f"Colour: {item['Colour']}", fill="black", font=font_text)
+            img.paste(sketch_img, (30, y_offset))
         
         y_offset += block_height
-
     return img
 
 # --- DATABASE & SESSION STATE ---
@@ -84,18 +64,13 @@ new_client_name = st.sidebar.text_input("New Client Name/Address")
 if st.sidebar.button("Add New Client"):
     if new_client_name and new_client_name not in st.session_state.db:
         st.session_state.db[new_client_name] = []
-        st.sidebar.success(f"Folder created for {new_client_name}")
 
 selected_client = st.sidebar.selectbox("Select Client", options=list(st.session_state.db.keys()))
 
 if selected_client:
     st.sidebar.divider()
-    st.sidebar.subheader("App Mode")
-    # These buttons toggle between entering data and viewing the final output
-    if st.sidebar.button("🛠 Survey Mode (Enter Windows)"):
-        st.session_state.view_mode = "Survey"
-    if st.sidebar.button("📜 Quote Mode (Show Client)"):
-        st.session_state.view_mode = "Quote"
+    if st.sidebar.button("🛠 Survey Mode"): st.session_state.view_mode = "Survey"
+    if st.sidebar.button("📜 Quote Mode"): st.session_state.view_mode = "Quote"
     
     st.sidebar.divider()
     job_type = st.sidebar.radio("Job Type", ["New Build", "Replacement"])
@@ -103,90 +78,46 @@ if selected_client:
 
 # --- MAIN SCREEN ---
 if selected_client:
-    # MODE 1: THE SURVEY FORM (Ladder work)
     if st.session_state.view_mode == "Survey":
         st.title(f"Surveying: {selected_client}")
-        # clear_on_submit ensures the form wipes clean instantly
-        with st.form(key=f"window_form_{st.session_state.form_count}", clear_on_submit=True):
+        
+        with st.form(key=f"f_{st.session_state.form_count}", clear_on_submit=True):
             col_data, col_draw = st.columns([1, 1])
             with col_data:
-                room = st.text_input("Room Location")
-                design = st.selectbox("Style", ["Casement", "Fixed", "T&T", "French", "Bifold", "Slider"])
-                w = st.number_input("Width (mm)", min_value=1, value=1200)
-                h = st.number_input("Height (mm)", min_value=1, value=1000)
-                sashes = st.number_input("Extra Openers", min_value=0, step=1)
-                glazing = st.selectbox("Glazing", ["Double", "Triple"])
-                color = st.selectbox("Colour", ["White", "Anthracite", "Black", "Oak", "Cream"])
-                notes = st.text_area("Notes")
+                room = st.text_input("Room")
+                design = st.selectbox("Style", ["Casement", "Fixed", "T&T", "French", "Bifold"])
+                w = st.number_input("Width (mm)", value=1200)
+                h = st.number_input("Height (mm)", value=1000)
+                sashes = st.number_input("Extra Openers", min_value=0)
+                color = st.selectbox("Colour", ["White", "Anthracite", "Black", "Oak"])
             
             with col_draw:
                 st.write("**Sketch Elevation**")
                 canvas_result = st_canvas(
                     stroke_width=3, stroke_color="#000000", background_color="#ffffff",
-                    height=350, width=350, drawing_mode="freedraw", key=f"canvas_{st.session_state.form_count}"
+                    height=350, width=350, drawing_mode="freedraw", key=f"c_{st.session_state.form_count}"
                 )
 
-            if st.form_submit_button("Save & Clear Form"):
+            if st.form_submit_button("Save & Clear"):
                 price = get_pricing(w, h, sashes, vat_mode)
                 st.session_state.db[selected_client].append({
                     "Room": room, "Design": design, "Size": f"{w}x{h}",
-                    "Colour": color, "Specs": f"{glazing}, {color}", 
-                    "Notes": notes, "Price": price,
-                    "Sketch": canvas_result.image_data, "Type": job_type
+                    "Colour": color, "Price": price, "Sketch": canvas_result.image_data
                 })
-                # Increment counter to force a fresh canvas key
                 st.session_state.form_count += 1
                 st.rerun()
 
-    # MODE 2: THE QUOTE & VERIFICATION (Client facing)
     else:
-        st.title(f"Formal Quote: {selected_client}")
-        st.write(f"**Job Type:** {job_type} | **VAT:** {'Inc 13.5%' if vat_mode else 'Excluded'}")
-        st.divider()
-
+        st.title(f"Quote: {selected_client}")
         if st.session_state.db[selected_client]:
-            # 1. The Verification Image Section
-            st.subheader("Design Verification Image")
-            st.caption("Click below to generate a single image of all sketches to send to the client for approval.")
-            
             if st.button("Generate Sendable Image"):
-                # Run the complex image generation function
                 final_img = create_verification_image(selected_client, st.session_state.db[selected_client])
-                
-                # Convert the image to bytes so it can be downloaded
                 buf = io.BytesIO()
                 final_img.save(buf, format="JPEG")
-                byte_im = buf.getvalue()
-
-                # Show the result and offer download
-                st.image(byte_im, caption="Final Verification Sheet")
-                st.download_button(
-                    label="Download Image to Phone",
-                    data=byte_im,
-                    file_name=f"{selected_client}_designs.jpg",
-                    mime="image/jpeg"
-                )
+                st.image(buf.getvalue())
+                st.download_button("Download Image", buf.getvalue(), "verify.jpg", "image/jpeg")
             
-            st.divider()
-            
-            # 2. The Pricing Summary Section
-            st.subheader("Pricing Summary")
-            total_price = 0
-            for i, item in enumerate(st.session_state.db[selected_client]):
-                with st.container(border=True):
-                    c1, c2, c3 = st.columns([1, 2, 1])
-                    with c1:
-                        if item["Sketch"] is not None: st.image(item["Sketch"], width=100)
-                    with c2:
-                        st.write(f"**{item['Room']}** - {item['Size']}")
-                    with c3:
-                        st.write(f"**€{item['Price']:,}**")
-                    total_price += item['Price']
-            
-            st.header(f"Total Project: €{total_price:,.2f}")
-            
+            for item in st.session_state.db[selected_client]:
+                st.write(f"**{item['Room']}** - €{item['Price']}")
         else:
-            st.warning("No windows added to this survey yet.")
-
-else:
-    st.info("👈 Enter a client name in the sidebar to start a new survey folder.")
+            st.warning("No windows added yet.")
