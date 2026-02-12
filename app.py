@@ -1,215 +1,270 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import io
-import base64
-from datetime import datetime
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
+import io
+from datetime import datetime
 
-# ==============================================================================
-# 1. ENTERPRISE CORE: DATA & PRICING KERNEL
-# ==============================================================================
+# ==========================================
+# 1. PRICING & LOGIC ENGINE
+# ==========================================
 
-class PricingKernel:
-    """
-    The 'Brain' of the app. Implements strict 2026 Area-Tiered Logic.
-    [cite: 2026-02-10, 2026-02-11]
-    """
-    # Tiered pricing list (Area < Limit, List Price per m2)
+class PricingEngine:
+    """Implements the 2026 Tiered Area Pricing & Material Multipliers."""
+    
+    # Area Tiers [cite: 2026-02-10]
     TIERS = [
         (0.6, 698), (0.8, 652), (1.0, 501), (1.2, 440), (1.5, 400),
         (2.0, 380), (2.5, 344), (3.0, 330), (3.5, 316), (4.0, 304),
         (4.5, 291), (999.0, 277)
     ]
 
-    # Material Multipliers (Applied to List Price)
-    # [Calculated from: PVC 0.6*2, Hardwood 0.95*2.2, Aluclad 1.0*2.5]
-    MAT_MAP = {
-        "PVC Standard": 0.55,           # Std PVC Discount approx 45%
+    # Material Multipliers [cite: 2026-02-11]
+    MULTIPLIERS = {
+        "uPVC Standard": 0.55,
         "Aluclad Standard": 1.0,
-        "PVC Sliding Sash": 1.2,        # 0.6 * 2
-        "Hardwood Sliding Sash": 2.09,  # 0.95 * 2.2
-        "Aluclad Sliding Sash": 2.5,    # 1.0 * 2.5
-        "Fireproof": 0.55
+        "uPVC Sliding Sash": 1.20,      # (0.60 * 2)
+        "Hardwood Sliding Sash": 2.09,  # (0.95 * 2.2)
+        "Aluclad Sliding Sash": 2.50,   # (1.0 * 2.5)
     }
 
-    # Replacement Charges (Flat fees added after discount)
-    FIXED_FEES = {
+    # Replacement/Fitting Fees [cite: 2026-02-11]
+    FITTING_FEES = {
+        "uPVC Standard": 0,
         "Aluclad Standard": 325,
-        "PVC Sliding Sash": 438,
+        "uPVC Sliding Sash": 438,
         "Hardwood Sliding Sash": 480,
-        "Aluclad Sliding Sash": 480,
-        "Fireproof": 245
+        "Aluclad Sliding Sash": 480
     }
 
     @classmethod
-    def calculate(cls, w, h, sashes, mat, job_type, vat_inc):
-        area = (w * h) / 1_000_000
-        # Determine List Price from Tiers
+    def calculate_unit_price(cls, w_mm, h_mm, material, job_type, extra_sashes=0):
+        area = (w_mm * h_mm) / 1_000_000
+        # Determine Base Rate from Ladder
         base_rate = next(rate for limit, rate in cls.TIERS if area < limit)
         
-        # Calculate List Total
-        list_total = (base_rate * area) + (sashes * 80)
+        # Calculate Net Price
+        list_price = (base_rate * area) + (extra_sashes * 80)
+        net_price = list_price * cls.MULTIPLIERS.get(material, 1.0)
         
-        # Apply Multiplier & Check €300 Floor [cite: 2026-02-11]
-        discounted_price = list_total * cls.MAT_MAP.get(mat, 1.0)
-        net_unit = max(discounted_price, 300.0)
+        # Enforce €300 floor [cite: 2026-02-11]
+        final_unit = max(net_price, 300.0)
         
-        # Add Fitting for Replacements
-        fitting = cls.FIXED_FEES.get(mat, 0) if job_type == "Replacement" else 0
-        final_ex_vat = net_unit + fitting
+        # Add Fitting Fee if Replacement
+        fitting = cls.FITTING_FEES.get(material, 0) if job_type == "Replacement" else 0
         
-        return round(final_ex_vat * (1.135 if vat_inc else 1.0), 2)
+        return round(final_unit + fitting, 2)
 
-# ==============================================================================
-# 2. TECHNICAL CAD ENGINE (SVG)
-# ==============================================================================
+# ==========================================
+# 2. VISUALIZATION ENGINE (MATPLOTLIB)
+# ==========================================
 
-class CADDrawer:
-    """Professional 2D Schematics for Reps and Fitters."""
-    @staticmethod
-    def get_svg(w, h, config, op_t, op_b, drip):
-        ratio = w / h
-        dw, dh = (280 if ratio > 1 else 280 * ratio), (280 if ratio < 1 else 280 / ratio)
-        x, y = (320 - dw)/2, (300 - dh)/2
+def generate_window_schematic(w, h, style):
+    """Draws a 2D technical elevation of the window."""
+    fig, ax = plt.subplots(figsize=(4, 4))
+    
+    # Outer Frame
+    frame = patches.Rectangle((0, 0), w, h, linewidth=4, edgecolor='#2c3e50', facecolor='#ebf5fb')
+    ax.add_patch(frame)
+    
+    if "Sash" in style:
+        # Drawing top and bottom sash overlap
+        top_sash = patches.Rectangle((w*0.05, h*0.5), w*0.9, h*0.45, linewidth=2, edgecolor='#34495e', facecolor='none')
+        bot_sash = patches.Rectangle((w*0.02, h*0.05), w*0.96, h*0.48, linewidth=3, edgecolor='#2c3e50', facecolor='none')
+        ax.add_patch(top_sash)
+        ax.add_patch(bot_sash)
+    elif "Casement" in style:
+        # Central Mullion
+        ax.plot([w/2, w/2], [0, h], color='#2c3e50', linewidth=3)
+        # Opening indicator (triangle)
+        ax.plot([w/2, w, w/2], [0, h/2, h], color='red', linestyle='--', linewidth=1)
         
-        def sym(sx, sy, sw, sh, mode):
-            if "Left" in mode: return f'<polyline points="{sx+10},{sy+sh/2} {sx+sw-10},{sy+10} {sx+sw-10},{sy+sh-10} {sx+10},{sy+sh/2}" fill="none" stroke="red" stroke-width="3"/>'
-            if "Right" in mode: return f'<polyline points="{sx+sw-10},{sy+sh/2} {sx+10},{sy+10} {sx+10},{sy+sh-10} {sx+sw-10},{sy+sh/2}" fill="none" stroke="red" stroke-width="3"/>'
-            if "Top" in mode: return f'<polyline points="{sx+sw/2},{sy+10} {sx+10},{sy+sh-10} {sx+sw-10},{sy+sh-10} {sx+sw/2},{sy+10}" fill="none" stroke="red" stroke-width="3"/>'
-            return ""
+    ax.set_xlim(-w*0.1, w*1.1)
+    ax.set_ylim(-h*0.1, h*1.1)
+    ax.axis('off')
+    return fig
 
-        # Base Frame
-        svg = f'<rect x="{x}" y="{y}" width="{dw}" height="{dh}" fill="none" stroke="black" stroke-width="6"/>'
-        
-        # Head Drip Visualization
-        if drip == "28mm Drip":
-            svg += f'<line x1="{x-10}" y1="{y}" x2="{x+dw+10}" y2="{y}" stroke="blue" stroke-width="4"/>'
-            svg += f'<text x="{x+dw/4}" y="{y-5}" font-size="10" fill="blue">28mm HEAD DRIP</text>'
+# ==========================================
+# 3. PDF GENERATION (REPORTLAB)
+# ==========================================
 
-        if config == "Transom Split":
-            th = dh * 0.3
-            svg += f'<rect x="{x}" y="{y}" width="{dw}" height="{th}" fill="#f0f7ff" stroke="black" stroke-width="3"/>'
-            svg += f'<rect x="{x}" y="{y+th}" width="{dw}" height="{dh-th}" fill="#f0f7ff" stroke="black" stroke-width="3"/>'
-            svg += sym(x, y, dw, th, op_t) + sym(x, y+th, dw, dh-th, op_b)
-        elif "Sash" in config:
-            svg += f'<rect x="{x+6}" y="{y+6}" width="{dw-12}" height="{dh/2}" fill="#f0f7ff" stroke="#666" stroke-width="2"/>'
-            svg += f'<rect x="{x+2}" y="{y+dh/2}" width="{dw-4}" height="{dh/2-2}" fill="#f0f7ff" stroke="black" stroke-width="4"/>'
-            svg += f'<path d="M{x-15} {y+dh*0.8} L{x-15} {y+dh*0.4}" stroke="blue" stroke-width="2" marker-end="url(#arrowhead)"/>'
-        else:
-            svg += sym(x, y, dw, dh, op_t)
+def create_pdf_quote(project_data, units):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    styles = getSampleStyleSheet()
+    elements = []
 
-        return f'<div style="text-align:center; background:white; padding:15px; border-radius:10px;"><svg width="340" height="320">{svg}</svg></div>'
+    # Header
+    elements.append(Paragraph(f"<b>QUOTE: {project_data['name']}</b>", styles['Title']))
+    elements.append(Paragraph(f"Date: {datetime.now().strftime('%Y-%m-%d')}", styles['Normal']))
+    elements.append(Paragraph(f"Type: {project_data['type']}", styles['Normal']))
+    elements.append(Spacer(1, 20))
 
-# ==============================================================================
-# 3. PDF EXPORT COMPONENT
-# ==============================================================================
+    # Table
+    data = [["Room", "Size (WxH)", "Material", "Style", "Price (Ex VAT)"]]
+    subtotal = 0
+    for u in units:
+        data.append([u['room'], f"{u['w']}x{u['h']}", u['mat'], u['style'], f"€{u['price']:,}"])
+        subtotal += u['price']
+    
+    vat = subtotal * 0.135
+    total = subtotal + vat
+    
+    data.append(["", "", "", "Subtotal:", f"€{subtotal:,.2f}"])
+    data.append(["", "", "", "VAT (13.5%):", f"€{vat:,.2f}"])
+    data.append(["", "", "", "<b>GRAND TOTAL:</b>", f"<b>€{total:,.2f}</b>"])
 
-class PDFExporter:
-    """Compiles Technical Project Proposals."""
-    @staticmethod
-    def generate(project_name, units):
-        buf = io.BytesIO()
-        doc = SimpleDocTemplate(buf, pagesize=A4)
-        style = getSampleStyleSheet()
-        elems = [Paragraph(f"<b>OFFICIAL QUOTATION: {project_name}</b>", style['Title']), Spacer(1, 20)]
-        
-        data = [['Room', 'Size', 'Specs', 'Drip', 'Price']]
-        for u in units:
-            data.append([u['room'], u['size'], u['mat'], u['drip'], f"€{u['price']:,}"])
-        
-        total = sum(u['price'] for u in units)
-        data.append(['', '', '', '<b>TOTAL (INC VAT)</b>', f'<b>€{total:,.2f}</b>'])
-        
-        t = Table(data, colWidths=[100, 80, 150, 80, 80])
-        t.setStyle(TableStyle([('GRID', (0,0), (-1,-1), 1, colors.grey), ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke)]))
-        elems.append(t)
-        doc.build(elems)
-        return buf.getvalue()
+    t = Table(data, colWidths=[100, 80, 100, 100, 100])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#004a99")),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('GRID', (0,0), (-1,-1), 1, colors.grey),
+        ('FONTSIZE', (0,0), (-1,-1), 10),
+    ]))
+    
+    elements.append(t)
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
 
-# ==============================================================================
-# 4. MAIN APP LOGIC (UI MODULES)
-# ==============================================================================
+# ==========================================
+# 4. MAIN STREAMLIT APP
+# ==========================================
+
+st.set_page_config(page_title="Pro-Window CRM", layout="wide")
+
+# Theme styling
+st.markdown("""
+    <style>
+    .stApp { background-color: #f4f7f9; }
+    .main { color: #1f4e79; }
+    div.stButton > button:first-child { background-color: #004a99; color: white; border-radius: 5px; }
+    </style>
+""", unsafe_allow_html=True)
+
+# State Management
+if 'jobs' not in st.session_state:
+    st.session_state.jobs = [] # Mock Database
 
 def main():
-    st.set_page_config(page_title="Windows Pro Enterprise", layout="wide")
-    if 'projects' not in st.session_state: st.session_state.projects = {}
-
-    with st.sidebar:
-        st.title("🏗️ Pro-Window Hub")
-        role = st.selectbox("Role Access", ["Sales Rep", "Fitter Tech"])
-        st.divider()
-        if role == "Sales Rep":
-            p_name = st.text_input("New Site Address")
-            p_mode = st.radio("Context", ["Replacement", "New Build"])
-            if st.button("Create Site"):
-                st.session_state.projects[p_name] = {"units": [], "mode": p_mode, "vat": True}
-        
-    active_sites = list(st.session_state.projects.keys())
-    if not active_sites:
-        st.info("Please create a site folder to begin.")
-        return
-
-    sel_site = st.selectbox("Active Project Folder", active_sites)
-    proj = st.session_state.projects[sel_site]
-
-    if role == "Sales Rep":
-        sales_view(sel_site, proj)
+    st.sidebar.title("🏢 Pro-Window CRM")
+    view = st.sidebar.radio("Navigation", ["Sales Rep View", "Fitter View"])
+    
+    if view == "Sales Rep View":
+        sales_rep_dashboard()
     else:
-        fitter_view(sel_site, proj)
+        fitter_dashboard()
 
-def sales_view(name, proj):
-    st.title(f"💼 Rep View: {name}")
-    t1, t2 = st.tabs(["📐 Survey Input", "📜 Quote Manager"])
+# ==========================================
+# 5. USER ROLES: SALES REP
+# ==========================================
 
-    with t1:
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            with st.container(border=True):
-                room = st.text_input("Room Identifier")
-                mat = st.selectbox("Product", list(PricingKernel.MAT_MAP.keys()))
-                lay = st.selectbox("Layout", ["Single", "Transom Split", "Vertical Sash"])
-                wc1, wc2 = st.columns(2)
-                w, h = wc1.number_input("Width (mm)", 100, 6000, 1200), wc2.number_input("Height (mm)", 100, 6000, 1000)
-                drip = st.selectbox("Head Drip Detail", ["Standard Drip", "28mm Drip", "No Drip"])
-                ot, ob = "Fixed", "Fixed"
-                if lay == "Transom Split":
-                    ot, ob = st.selectbox("Top", ["Fixed", "Top Hung"]), st.selectbox("Bottom", ["Fixed", "Side Left", "Side Right"])
-                else: ot = st.selectbox("Operation", ["Fixed", "Side Left", "Side Right", "Top Hung"])
-                sas = st.slider("Extra Sashes", 0, 6, 1 if ot != "Fixed" else 0)
+def sales_rep_dashboard():
+    st.title("💼 Sales Representative Portal")
+    
+    tab_setup, tab_config = st.tabs(["📁 Project Setup", "📐 Configurator & Quote"])
+    
+    with tab_setup:
+        with st.form("project_form"):
+            name = st.text_input("Project Name / Address")
+            p_type = st.selectbox("Project Type", ["Replacement", "New Build", "Supply Only"])
+            client = st.text_input("Client Reference")
+            if st.form_submit_button("Initialize Project"):
+                st.session_state.jobs.append({
+                    "name": name, "type": p_type, "client": client, 
+                    "units": [], "status": "Pending Measurement"
+                })
+                st.success(f"Project {name} Created.")
 
-        with c2:
-            st.subheader("CAD Preview")
-            st.markdown(CADDrawer.get_svg(w, h, lay, ot, ob, drip), unsafe_allow_html=True)
-            if st.button("✅ SAVE UNIT", use_container_width=True, type="primary"):
-                price = PricingKernel.calculate(w, h, sas, mat, proj['mode'], proj['vat'])
-                proj['units'].append({"room": room, "size": f"{w}x{h}", "mat": mat, "price": price, "drip": drip, "w": w, "h": h})
+    with tab_config:
+        if not st.session_state.jobs:
+            st.warning("Please setup a project first.")
+            return
+
+        active_job = st.selectbox("Select Active Project", [j['name'] for j in st.session_state.jobs])
+        job = next(j for j in st.session_state.jobs if j['name'] == active_job)
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.subheader("Add Window/Door Unit")
+            room = st.text_input("Room Identifier (e.g. Kitchen)")
+            w = st.number_input("Width (mm)", 100, 5000, 1200)
+            h = st.number_input("Height (mm)", 100, 5000, 1000)
+            mat = st.selectbox("Material", ["uPVC Standard", "Aluclad Standard", "uPVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash"])
+            style = st.selectbox("Design Style", ["Casement", "Sliding Sash", "Tilt & Turn", "Fixed"])
+            
+            if st.button("➕ Add Unit to Project"):
+                price = PricingEngine.calculate_unit_price(w, h, mat, job['type'])
+                job['units'].append({
+                    "room": room, "w": w, "h": h, "mat": mat, 
+                    "style": style, "price": price, "verified": False
+                })
                 st.rerun()
 
-    with t2:
-        if proj['units']:
-            st.table(pd.DataFrame(proj['units'])[['room', 'size', 'mat', 'price']])
-            if st.button("Generate Official PDF"):
-                pdf_data = PDFExporter.generate(name, proj['units'])
-                st.download_button("📥 Download Quote", pdf_data, f"Quote_{name}.pdf")
+        with col2:
+            st.subheader("Elevation Preview")
+            fig = generate_window_schematic(w, h, style)
+            st.pyplot(fig)
+            st.metric("Estimated Unit Price", f"€{PricingEngine.calculate_unit_price(w, h, mat, job['type']):,}")
 
-def fitter_view(name, proj):
-    st.title(f"🔧 Fitter Terminal: {name}")
-    code = st.text_input("Fitter Code (FIT-2026)", type="password")
-    if code != "FIT-2026": return st.warning("Access Restricted.")
+        if job['units']:
+            st.divider()
+            st.subheader("Current Unit Schedule")
+            df = pd.DataFrame(job['units'])
+            st.dataframe(df[['room', 'w', 'h', 'mat', 'price']], use_container_width=True)
+            
+            pdf_buf = create_pdf_quote(job, job['units'])
+            st.download_button("📥 Download Professional Quote (PDF)", pdf_buf, file_name=f"Quote_{job['name']}.pdf")
+
+# ==========================================
+# 6. USER ROLES: FITTER
+# ==========================================
+
+def fitter_dashboard():
+    st.title("🔧 Fitter Technical Terminal")
     
-    for i, u in enumerate(proj['units']):
-        with st.container(border=True):
-            st.write(f"### {u['room']} - {u['mat']}")
-            st.caption(f"Survey Meas: {u['size']} | Drip: {u['drip']}")
-            fw = st.number_input(f"Final Width {i}", value=float(u['w']))
-            if st.button(f"Harden Dimension {i}"):
-                u['size'] = f"{fw}x{u['h']}"
-                st.success("Production Measure Confirmed")
+    fitter_code = st.text_input("Enter Fitter Authorization Code", type="password")
+    
+    if fitter_code == "FITTER2026":
+        st.success("Access Granted: Technical Validation Mode")
+        
+        pending_jobs = [j for j in st.session_state.jobs if j['status'] == "Pending Measurement"]
+        
+        if not pending_jobs:
+            st.info("No pending measurements assigned.")
+            return
+
+        selected_job_name = st.selectbox("Select Job to Verify", [j['name'] for j in pending_jobs])
+        job = next(j for j in st.session_state.jobs if j['name'] == selected_job_name)
+
+        st.subheader(f"Project: {job['name']}")
+        
+        for i, unit in enumerate(job['units']):
+            with st.expander(f"📍 Unit: {unit['room']} (Rough: {unit['w']}x{unit['h']})"):
+                c1, c2 = st.columns(2)
+                final_w = c1.number_input(f"Final Width (mm) - {unit['room']}", value=unit['w'], key=f"fw_{i}")
+                final_h = c2.number_input(f"Final Height (mm) - {unit['room']}", value=unit['h'], key=f"fh_{i}")
+                
+                if st.button(f"Confirm Dimensions {i}"):
+                    unit['w'] = final_w
+                    unit['h'] = final_h
+                    unit['verified'] = True
+                    st.toast(f"{unit['room']} measurement hardened.")
+
+        if all(u['verified'] for u in job['units']):
+            if st.button("🚀 Push to Manufacturing"):
+                job['status'] = "In Production"
+                st.success("Project status updated to Production.")
+                st.rerun()
+    elif fitter_code:
+        st.error("Invalid Code.")
 
 if __name__ == "__main__":
     main()
