@@ -5,85 +5,52 @@ from PIL import Image, ImageDraw
 import numpy as np
 import io
 
-st.set_page_config(page_title="Pro Survey", layout="centered")
-
-def get_pricing(w, h, sashes, material, job_type, include_vat):
+# --- PRICING ENGINE ---
+def get_pricing(w, h, sas, mat, job, vat):
     area = (w * h) / 1000000
-    if area < 0.6: base = 698
-    elif area < 0.8: base = 652
-    elif area < 1.0: base = 501
-    elif area < 1.2: base = 440
-    elif area < 1.5: base = 400
-    elif area < 2.0: base = 380
-    elif area < 2.5: base = 344
-    elif area < 3.0: base = 330
-    elif area < 3.5: base = 316
-    elif area < 4.0: base = 304
-    elif area < 4.5: base = 291
-    else: base = 277
+    if area < 0.6: b = 698
+    elif area < 0.8: b = 652
+    elif area < 1.0: b = 501
+    elif area < 1.2: b = 440
+    elif area < 1.5: b = 400
+    elif area < 2.0: b = 380
+    elif area < 2.5: b = 344
+    elif area < 3.0: b = 330
+    elif area < 3.5: b = 316
+    elif area < 4.0: b = 304
+    elif area < 4.5: b = 291
+    else: b = 277
     
-    unit_ex = base + (sashes * 80)
-    cost, fee = 0, 0
-    if material == "PVC Standard": cost = unit_ex * 0.55
-    elif material == "Aluclad Standard": 
-        cost = unit_ex
-        if job_type == "Replacement": fee = 325
-    elif material == "PVC Sliding Sash":
-        cost = (unit_ex * 0.60) * 2
-        if job_type == "Replacement": fee = 438
-    elif material == "Hardwood Sliding Sash":
-        cost = (unit_ex * 0.95) * 2.2
-        if job_type == "Replacement": fee = 480
-    elif material == "Aluclad Sliding Sash":
-        cost = (unit_ex * 1.0) * 2.5
-        if job_type == "Replacement": fee = 480
-    elif material == "Fireproof":
-        cost = unit_ex * 0.55
-        if job_type == "Replacement": fee = 245
-    
-    final = max(cost, 300.0) + fee
-    return round(final * 1.135, 2) if include_vat else round(final, 2)
+    unit = b + (sas * 80)
+    c, fee = 0, 0
+    if mat == "PVC Standard": c = unit * 0.55
+    elif mat == "Aluclad Standard": c = unit; fee = 325 if job == "Replacement" else 0
+    elif mat == "PVC Sliding Sash": c = (unit * 0.60) * 2; fee = 438 if job == "Replacement" else 0
+    elif mat == "Hardwood Sliding Sash": c = (unit * 0.95) * 2.2; fee = 480 if job == "Replacement" else 0
+    elif mat == "Aluclad Sliding Sash": c = (unit * 1.0) * 2.5; fee = 480 if job == "Replacement" else 0
+    elif mat == "Fireproof": c = unit * 0.55; fee = 245 if job == "Replacement" else 0
+    return round((max(c, 300.0) + fee) * (1.135 if vat else 1), 2)
 
+# --- IMAGE TOOLS ---
 def create_frame(w, h):
-    bg = Image.new('RGB', (300, 300), (255, 255, 255))
-    draw = ImageDraw.Draw(bg)
-    r = w / h
+    img = Image.new('RGB', (300, 300), "white")
+    d = ImageDraw.Draw(img)
+    r = w/h
     bw, bh = (260, 260/r) if r > 1 else (260*r, 260)
     x, y = (300-bw)/2, (300-bh)/2
-    draw.rectangle([x, y, x+bw, y+bh], outline="black", width=10)
-    return bg
+    d.rectangle([x, y, x+bw, y+bh], outline="black", width=8)
+    return img
 
-if 'db' not in st.session_state: st.session_state.db = {}
-if 'sigs' not in st.session_state: st.session_state.sigs = {}
-if 'view' not in st.session_state: st.session_state.view = "Survey"
-if 'edit_idx' not in st.session_state: st.session_state.edit_idx = None
-if 'f_count' not in st.session_state: st.session_state.f_count = 0
-
-st.sidebar.title("📁 Site Folders")
-with st.sidebar.expander("➕ Add Site"):
-    sn = st.text_input("Address")
-    if st.button("Create"):
-        if sn: st.session_state.db[sn] = []; st.rerun()
-
-sel = st.sidebar.selectbox("Active Site", options=["Select..."] + list(st.session_state.db.keys()))
-
-if sel != "Select...":
-    job = st.sidebar.radio("Job", ["New Build", "Replacement"])
-    vat = st.sidebar.toggle("Inc VAT", True)
-    if st.sidebar.button("🛠 Survey"): st.session_state.view = "Survey"; st.rerun()
-    if st.sidebar.button("📜 Quote"): st.session_state.view = "Quote"; st.rerun()
-
-    if st.session_state.view == "Survey":
-        idx = st.session_state.edit_idx
-        is_e = idx is not None
-        curr = st.session_state.db[sel][idx] if is_e else None
-        st.title(f"{'Edit' if is_e else 'Survey'}")
-        
-        room = st.text_input("Room", value=curr["Room"] if is_e else "")
-        prod = st.selectbox("Product", ["PVC Standard", "Aluclad Standard", "PVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash", "Fireproof"], 
-                           index=0 if not is_e else ["PVC Standard", "Aluclad Standard", "PVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash", "Fireproof"].index(curr["Material"]))
-        w = st.number_input("Width (mm)", value=int(curr["Size"].split('x')[0]) if is_e else 1200)
-        h = st.number_input("Height (mm)", value=int(curr["Size"].split('x')[1]) if is_e else 1000)
-        
-        st.write(f"**Sketch Design:**")
-        canvas = st_canvas(stroke_width=3, stroke_color="black", background_image=create_frame
+def create_ver_img(name, data, sig=None):
+    bh, hh, cw = 450, 150, 900
+    img = Image.new('RGB', (cw, (bh*len(data)) + hh + (300 if sig is not None else 0)), "white")
+    d = ImageDraw.Draw(img)
+    d.text((40, 40), f"VERIFICATION: {name.upper()}", fill="black")
+    y = hh
+    for itm in data:
+        if itm["Sketch"] is not None:
+            sk = Image.fromarray(np.array(itm["Sketch"]).astype('uint8')).convert("RGB")
+            sk.thumbnail((350, 350)); img.paste(sk, (40, y))
+        d.text((420, y+40), f"ROOM: {itm['Room']}", fill="black")
+        d.text((420, y+80), f"PRODUCT: {itm['Material']}", fill="black")
+        d.text((420, y+120), f"SIZE: {itm['Size']} | COL: {itm['
