@@ -3,3 +3,5 @@ pandas
 Pillow
 plotly
 numpy
+reportlab
+sqlite3
