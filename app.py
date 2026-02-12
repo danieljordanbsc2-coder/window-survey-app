@@ -1,14 +1,9 @@
 import streamlit as st
 import pandas as pd
-from streamlit_drawable_canvas import st_canvas
-from PIL import Image, ImageDraw
-import numpy as np
-import io
 
-# --- PRICING ENGINE ---
+# --- PRICING ENGINE (Your Exact Rules) ---
 def get_p(w, h, sas, mat, job, vat):
     area = (w * h) / 1000000
-    # List Price Tiers [cite: 2026-02-10]
     if area < 0.6: b = 698
     elif area < 0.8: b = 652
     elif area < 1.0: b = 501
@@ -22,87 +17,78 @@ def get_p(w, h, sas, mat, job, vat):
     elif area < 4.5: b = 291
     else: b = 277
     
-    unit_base = b + (sas * 80)
+    u = b + (sas * 80)
     c, f = 0, 0
-    # Discounts & Sash Multipliers [cite: 2026-02-11]
-    if mat == "PVC Standard": c = unit_base * 0.55
-    elif mat == "Aluclad Standard": c = unit_base; f = 325 if job == "Replacement" else 0
-    elif mat == "PVC Sliding Sash": c = (unit_base * 0.60) * 2; f = 438 if job == "Replacement" else 0
-    elif mat == "Hardwood Sliding Sash": c = (unit_base * 0.95) * 2.2; f = 480 if job == "Replacement" else 0
-    elif mat == "Aluclad Sliding Sash": c = unit_base * 2.5; f = 480 if job == "Replacement" else 0
-    elif mat == "Fireproof": c = unit_base * 0.55; f = 245 if job == "Replacement" else 0
+    if mat == "PVC Standard": c = u * 0.55
+    elif mat == "Aluclad Standard": c = u; f = 325 if job == "Replacement" else 0
+    elif mat == "PVC Sliding Sash": c = (u * 0.60) * 2; f = 438 if job == "Replacement" else 0
+    elif mat == "Hardwood Sliding Sash": c = (u * 0.95) * 2.2; f = 480 if job == "Replacement" else 0
+    elif mat == "Aluclad Sliding Sash": c = u * 2.5; f = 480 if job == "Replacement" else 0
+    elif mat == "Fireproof": c = u * 0.55; f = 245 if job == "Replacement" else 0
     
-    # Calculation: Max of (Discounted Unit, €300 Floor) + Fitting Fee
     final = max(c, 300.0) + f
     return round(final * (1.135 if vat else 1), 2)
 
-# --- PROPORTIONAL FRAME GENERATOR ---
-def mk_fr(w, h):
-    img = Image.new('RGB', (300, 300), "white")
-    d = ImageDraw.Draw(img)
-    r = w/h
-    # Scale to fit a 300x300 canvas
-    if r > 1: bw, bh = 260, 260/r
-    else: bh, bw = 260, 260*r
-    x, y = (300-bw)/2, (300-bh)/2
-    # Draw Bold Frame
-    d.rectangle([x, y, x+bw, y+bh], outline="black", width=12)
-    return img
+# --- AUTO-WINDOW RENDERER ---
+def draw_window(w, h, style):
+    r = w / h
+    width = 250 if r > 1 else 250 * r
+    height = 250 if r < 1 else 250 / r
+    
+    # Opening Symbols
+    overlay = ""
+    if style == "Side Hung (Left)": overlay = f'<polyline points="10,{height/2} {width-10},10 {width-10},{height-10} 10,{height/2}" fill="none" stroke="red" stroke-width="4"/>'
+    elif style == "Top Hung": overlay = f'<polyline points="{width/2},10 10,{height-10} {width-10},{height-10} {width/2},10" fill="none" stroke="red" stroke-width="4"/>'
+    
+    svg = f"""
+    <svg width="300" height="300" viewBox="-25 -25 350 350">
+        <rect x="0" y="0" width="{width}" height="{height}" fill="#f0f8ff" stroke="black" stroke-width="8" />
+        {overlay}
+        <text x="{width/2}" y="{height + 30}" text-anchor="middle" font-family="Arial" font-weight="bold">{w} x {h}</text>
+    </svg>
+    """
+    st.write(f'<div style="display:flex;justify-content:center;">{svg}</div>', unsafe_allow_html=True)
 
 # --- SESSION SETUP ---
 if 'db' not in st.session_state: st.session_state.db = {}
-if 'f_cnt' not in st.session_state: st.session_state.f_cnt = 0
 
-st.sidebar.title("📁 Site Management")
-job_m = st.sidebar.radio("Job Type", ["New Build", "Replacement"])
-vat_m = st.sidebar.toggle("Inc 13.5% VAT", True)
-site_n = st.sidebar.text_input("Site Name")
-if st.sidebar.button("Create Site"):
-    if site_n: st.session_state.db[site_n] = []; st.rerun()
-
-sel = st.sidebar.selectbox("Active Site", ["Select..."] + list(st.session_state.db.keys()))
+st.sidebar.title("📁 Site Manager")
+site = st.sidebar.text_input("Site Address")
+if st.sidebar.button("Create Site"): st.session_state.db[site] = []
+sel = st.sidebar.selectbox("Active Folder", ["Select..."] + list(st.session_state.db.keys()))
 
 if sel != "Select...":
-    items = st.session_state.db[sel]
-    # RUNNING TOTAL (Top Dashboard)
-    total_val = sum(x['Price'] for x in items)
-    st.metric("Total Project Value", f"€{total_val:,.2f}", f"{len(items)} Units")
+    job = st.sidebar.radio("Job", ["New Build", "Replacement"])
+    vat = st.sidebar.toggle("Inc VAT", True)
     
-    st.divider()
+    st.title(f"Survey: {sel}")
     
-    # SURVEY INPUTS
-    room = st.selectbox("Room", ["Kitchen", "Living", "Master Bed", "Bathroom", "Other"])
+    # 1. Inputs
+    room = st.selectbox("Room", ["Kitchen", "Living", "Master Bed", "Bathroom", "Hall"])
     prod = st.selectbox("Product", ["PVC Standard", "Aluclad Standard", "PVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash", "Fireproof"])
     
-    c_w, c_h = st.columns(2)
-    w = c_w.number_input("Width (mm)", 100, 4000, 1200)
-    h = c_h.number_input("Height (mm)", 100, 4000, 1000)
+    c1, c2 = st.columns(2)
+    w = c1.number_input("Width (mm)", 100, 4000, 1200)
+    h = c2.number_input("Height (mm)", 100, 4000, 1000)
     
-    # LIVE SKETCH PAD
-    st.write(f"**Elevation: {w}x{h}** (Frame updates as you type)")
-    canvas = st_canvas(
-        stroke_width=4, stroke_color="black", background_image=mk_fr(w, h),
-        height=300, width=300, key=f"c_{w}_{h}_{st.session_state.f_cnt}"
-    )
+    # 2. Tap to Choose Opening (Efficiency Hack)
+    style = st.radio("Opening Type", ["Fixed", "Side Hung (Left)", "Top Hung"], horizontal=True)
+    
+    # 3. Visual Preview
+    st.write("### Preview")
+    draw_window(w, h, style)
     
     sas = st.number_input("Extra Openers", 0, 10, 0)
     col = st.selectbox("Colour", ["White", "Anthracite", "Black", "Oak"])
     
-    if st.button("💾 Save Window"):
-        p = get_p(w, h, sas, prod, job_m, vat_m)
-        st.session_state.db[sel].append({
-            "Room": room, "Mat": prod, "Size": f"{w}x{h}", "Price": p, "Sketch": canvas.image_data
-        })
-        st.session_state.f_cnt += 1
-        st.rerun()
+    if st.button("💾 Save Window", use_container_width=True):
+        price = get_p(w, h, sas, prod, job, vat)
+        st.session_state.db[sel].append({"Room": room, "Size": f"{w}x{h}", "Style": style, "Price": price})
+        st.success(f"Saved! Unit Price: €{price}")
 
-    # SAVED WINDOWS LIST
+    # 4. Summary Table
     st.divider()
-    for i, itm in enumerate(st.session_state.db[sel]):
-        with st.container(border=True):
-            ci, ct, cb = st.columns([1, 2, 1])
-            if itm["Sketch"] is not None: ci.image(itm["Sketch"], width=80)
-            ct.write(f"**{itm['Room']}** - €{itm['Price']:,}")
-            if cb.button("🗑", key=f"d_{i}"):
-                st.session_state.db[sel].pop(i)
-                st.rerun()
+    if st.session_state.db[sel]:
+        df = pd.DataFrame(st.session_state.db[sel])
+        st.table(df)
+        st.metric("Total Quote", f"€{df['Price'].sum():,.2f}")
