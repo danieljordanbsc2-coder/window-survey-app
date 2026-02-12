@@ -1,16 +1,11 @@
 import streamlit as st
 import pandas as pd
-from streamlit_drawable_canvas import st_canvas
-from PIL import Image, ImageDraw
-import numpy as np
 import io
 
-# --- PRICING ENGINE ---
+# --- PRICING ENGINE (Locked to your 2026 Price List) ---
 def get_p(w, h, sas, mat, job, vat):
-    # Calculate Area in Square Meters
     area = (w * h) / 1000000
-    
-    # Pricing Tiers [cite: 2026-02-10]
+    # Tier Logic [cite: 2026-02-10]
     if area < 0.6: b = 698
     elif area < 0.8: b = 652
     elif area < 1.0: b = 501
@@ -22,109 +17,99 @@ def get_p(w, h, sas, mat, job, vat):
     elif area < 3.5: b = 316
     elif area < 4.0: b = 304
     elif area < 4.5: b = 291
-    else: b = 277 # Over 4.5m2
+    else: b = 277
     
     unit_base = b + (sas * 80)
-    c, f = 0, 0
+    c, fee = 0, 0
+    # Material & Sash Logic [cite: 2026-02-11]
+    if mat == "PVC Standard": c = unit_base * 0.55
+    elif mat == "Aluclad Standard": c = unit_base; fee = 325 if job == "Replacement" else 0
+    elif mat == "PVC Sliding Sash": c = (unit_base * 0.60) * 2; fee = 438 if job == "Replacement" else 0
+    elif mat == "Hardwood Sliding Sash": c = (unit_base * 0.95) * 2.2; fee = 480 if job == "Replacement" else 0
+    elif mat == "Aluclad Sliding Sash": c = unit_base * 2.5; fee = 480 if job == "Replacement" else 0
+    elif mat == "Fireproof": c = unit_ex * 0.55; fee = 245 if job == "Replacement" else 0
     
-    # Logic [cite: 2026-02-11]
-    if mat == "PVC Standard": 
-        c = unit_base * 0.55
-    elif mat == "Aluclad Standard": 
-        c = unit_base
-        f = 325 if job == "Replacement" else 0
-    elif mat == "PVC Sliding Sash": 
-        c = (unit_base * 0.60) * 2
-        f = 438 if job == "Replacement" else 0
-    elif mat == "Hardwood Sliding Sash": 
-        c = (unit_base * 0.95) * 2.2
-        f = 480 if job == "Replacement" else 0
-    elif mat == "Aluclad Sliding Sash": 
-        c = unit_base * 2.5
-        f = 480 if job == "Replacement" else 0
-    elif mat == "Fireproof": 
-        c = unit_base * 0.55
-        f = 245 if job == "Replacement" else 0
-        
-    final = max(c, 300.0) + f
+    final = max(c, 300.0) + fee
     return round(final * (1.135 if vat else 1), 2)
 
-# --- FRAME GENERATOR ---
-def mk_fr(w, h):
-    img = Image.new('RGB', (300, 300), "white")
-    d = ImageDraw.Draw(img)
-    r = w/h
-    if r > 1: bw, bh = 260, 260/r
-    else: bh, bw = 260, 260*r
-    x, y = (300-bw)/2, (300-bh)/2
-    d.rectangle([x, y, x+bw, y+bh], outline="black", width=15) # Bold Frame
-    return img
+# --- INSTANT PREVIEW (The Simpler Way) ---
+def draw_window_preview(w, h):
+    ratio = w / h
+    # Scale to fit a 300px box
+    if ratio > 1: width, height = 300, 300/ratio
+    else: height, width = 300, 300*ratio
+    
+    svg = f"""
+    <svg width="300" height="300" viewBox="0 0 320 320" xmlns="http://www.w3.org/2000/svg">
+        <rect x="{(300-width)/2}" y="{(300-height)/2}" width="{width}" height="{height}" 
+              fill="#e1f5fe" stroke="black" stroke-width="8" />
+        <line x1="{(300-width)/2}" y1="{(300-height)/2}" x2="{(300+width)/2}" y2="{(300+height)/2}" stroke="#b3e5fc" stroke-width="2" />
+        <text x="160" y="315" text-anchor="middle" font-family="sans-serif" font-size="14">Shape: {w}mm x {h}mm</text>
+    </svg>
+    """
+    st.write(f'<div style="display: flex; justify-content: center;">{svg}</div>', unsafe_allow_html=True)
 
 # --- SESSION STATE ---
 if 'db' not in st.session_state: st.session_state.db = {}
-if 'view' not in st.session_state: st.session_state.view = "S"
-if 'f_cnt' not in st.session_state: st.session_state.f_cnt = 0
 
-# --- SIDEBAR ---
-st.sidebar.title("📁 Site Management")
-site_n = st.sidebar.text_input("New Site Address")
-if st.sidebar.button("Create Folder"):
-    if site_n: st.session_state.db[site_n] = []; st.rerun()
+# --- SIDEBAR & GLOBAL SETTINGS ---
+st.sidebar.title("🛠 Project Control")
+job_mode = st.sidebar.radio("Project Type", ["New Build", "Replacement"], help="Replacement adds fitting fees automatically.")
+vat_mode = st.sidebar.toggle("Include 13.5% VAT", True)
 
-sel = st.sidebar.selectbox("Active Site", ["Select..."] + list(st.session_state.db.keys()))
+st.sidebar.divider()
+site_name = st.sidebar.text_input("Site Address")
+if st.sidebar.button("Create Site Folder"):
+    if site_name: st.session_state.db[site_name] = []; st.rerun()
 
-if sel != "Select...":
-    job = st.sidebar.radio("Job Type", ["New Build", "Replacement"])
-    vat = st.sidebar.toggle("Include 13.5% VAT", True)
-    if st.sidebar.button("🛠 Survey"): st.session_state.view = "S"; st.rerun()
-    if st.sidebar.button("📜 Quote"): st.session_state.view = "Q"; st.rerun()
+sel_site = st.sidebar.selectbox("Active Folder", ["Select..."] + list(st.session_state.db.keys()))
 
 # --- MAIN APP ---
-if sel != "Select...":
-    if st.session_state.view == "S":
-        st.title(f"Survey: {sel}")
-        
-        # Dimensions
-        room = st.text_input("Room Name")
+if sel_site != "Select...":
+    st.title(f"🏠 {sel_site}")
+    
+    with st.expander("➕ Add New Window", expanded=True):
+        # Quick Room Select for efficiency
+        room_preset = st.selectbox("Room", ["Kitchen", "Living Room", "Master Bed", "Bed 2", "Bed 3", "Bathroom", "Hall", "Other..."])
+        if room_preset == "Other...":
+            room_name = st.text_input("Enter Room Name")
+        else:
+            room_name = room_preset
+
         prod = st.selectbox("Product", ["PVC Standard", "Aluclad Standard", "PVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash", "Fireproof"])
         
-        c1, c2 = st.columns(2)
-        with c1: w = st.number_input("Width (mm)", value=1200, step=10)
-        with c2: h = st.number_input("Height (mm)", value=1000, step=10)
+        col1, col2 = st.columns(2)
+        with col1: w = st.number_input("Width (mm)", 100, 5000, 1200, 10)
+        with col2: h = st.number_input("Height (mm)", 100, 5000, 1000, 10)
         
-        # Frame Preview
-        st.write(f"**Elevation Guide ({w}x{h}):**")
+        # INSTANT PREVIEW (This replaces the broken drawing box)
+        st.write("### Live Design Shape")
+        draw_window_preview(w, h)
         
-        # KEY CHANGE FORCING REFRESH
-        canvas = st_canvas(
-            stroke_width=4, stroke_color="black", 
-            background_image=mk_fr(w, h), 
-            height=300, width=300, 
-            key=f"canv_{w}_{h}_{st.session_state.f_cnt}"
-        )
+        sas = st.number_input("Extra Openers", 0, 10, 0)
+        col = st.selectbox("Finish", ["White", "Anthracite", "Black", "Oak", "Cream"])
         
-        sas = st.number_input("Extra Openers", value=0)
-        col = st.selectbox("Colour", ["White", "Anthracite", "Black", "Oak", "Cream"])
-        
-        if st.button("Save Window"):
-            price = get_p(w, h, sas, prod, job, vat)
-            st.session_state.db[sel].append({
-                "Room": room, "Material": prod, "Size": f"{w}x{h}", "Price": price, "Sketch": canvas.image_data
+        if st.button("💾 Save to Quote", use_container_width=True):
+            price = get_p(w, h, sas, prod, job_mode, vat_mode)
+            st.session_state.db[sel_site].append({
+                "Room": room_name, "Prod": prod, "Size": f"{w}x{h}", "Price": price, "Col": col
             })
-            st.session_state.f_cnt += 1
-            st.success(f"Saved! Unit Price: €{price}")
+            st.success(f"Added! Unit: €{price}")
             st.rerun()
 
-        # Site List
+    # SITE SUMMARY TABLE
+    if st.session_state.db[sel_site]:
         st.divider()
-        for i, itm in enumerate(st.session_state.db[sel]):
-            with st.container(border=True):
-                st.write(f"**{itm['Room']}** | {itm['Size']} | €{itm['Price']}")
-                if st.button("🗑", key=f"del_{i}"):
-                    st.session_state.db[sel].pop(i)
-                    st.rerun()
-    
-    elif st.session_state.view == "Q":
-        st.title("Quote Summary")
-        total = sum([x['Price'] for x in st.session_state.db[sel]])
-        st.header(f"Total: €{total:,.2f}")
+        st.subheader("Current Quote Breakdown")
+        df = pd.DataFrame(st.session_state.db[sel_site])
+        st.table(df[['Room', 'Prod', 'Size', 'Price']])
+        
+        total = sum(d['Price'] for d in st.session_state.db[sel_site])
+        st.metric("Total Order Value", f"€{total:,.2f}")
+        
+        if st.button("🗑 Clear All Windows"):
+            st.session_state.db[sel_site] = []
+            st.rerun()
+
+else:
+    st.info("👈 Enter a site address in the sidebar to begin your survey.")
