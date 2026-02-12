@@ -3,240 +3,190 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import io
-import json
+import base64
 
-# --- 1. ENTERPRISE STYLING & CONFIG ---
-st.set_page_config(
-    page_title="PRO-SURVEY ENTERPRISE",
-    page_icon="🏗️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# --- 1. ENTERPRISE CONFIGURATION ---
+st.set_page_config(page_title="Windows Enterprise v5.0", layout="wide", initial_sidebar_state="expanded")
 
-# Custom CSS for high-density "Fieldwire" look
-st.markdown("""
-    <style>
-    .main { background-color: #f4f7f6; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e1e4e8; }
-    div[data-testid="stExpander"] { background-color: #ffffff; border: 1px solid #e1e4e8; border-radius: 8px; }
-    .stButton button { width: 100%; border-radius: 5px; height: 3em; font-weight: bold; }
-    .fitter-note { background-color: #fff3cd; padding: 10px; border-left: 5px solid #ffca2c; border-radius: 4px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- 2. CORE ENGINE: PRICING & VALIDATION ---
-def calculate_enterprise_pricing(w, h, extra_sashes, material, job_type, include_vat):
+# --- 2. THE PRICING ENGINE (Locked to 2026 Rules) ---
+def get_p(w, h, sas, mat, job, vat):
     """
-    Implements 2026 Price Ladder and Multipliers.
+    Implements the 2026 Area-Tiered Price Ladder.
     [cite: 2026-02-10, 2026-02-11]
     """
     area = (w * h) / 1_000_000
+    # Strict Area Tiers
+    if area < 0.6: b = 698
+    elif area < 0.8: b = 652
+    elif area < 1.0: b = 501
+    elif area < 1.2: b = 440
+    elif area < 1.5: b = 400
+    elif area < 2.0: b = 380
+    elif area < 2.5: b = 344
+    elif area < 3.0: b = 330
+    elif area < 3.5: b = 316
+    elif area < 4.0: b = 304
+    elif area < 4.5: b = 291
+    else: b = 277
     
-    # Area-Tiered Rate Ladder
-    if area < 0.6: rate = 698
-    elif area < 0.8: rate = 652
-    elif area < 1.0: rate = 501
-    elif area < 1.2: rate = 440
-    elif area < 1.5: rate = 400
-    elif area < 2.0: rate = 380
-    elif area < 2.5: rate = 344
-    elif area < 3.0: rate = 330
-    elif area < 3.5: rate = 316
-    elif area < 4.0: rate = 304
-    elif area < 4.5: rate = 291
-    else: rate = 277
+    # Calculation Logic
+    unit_base = (b * area) + (sas * 80)
+    c, fee = 0, 0
     
-    # Base Calculation: (Rate * Area) + Opener Surcharge
-    base_calc = (rate * area) + (extra_sashes * 80)
-    net_cost, fitting_fee = 0, 0
-    
-    # Material Logic & Multipliers
-    if material == "PVC Standard":
-        net_cost = base_calc * 0.55
-    elif material == "Aluclad Standard":
-        net_cost = base_calc
-        fitting_fee = 325 if job_type == "Replacement" else 0
-    elif material == "PVC Sliding Sash":
-        net_cost = (base_calc * 0.60) * 2
-        fitting_fee = 438 if job_type == "Replacement" else 0
-    elif material == "Hardwood Sliding Sash":
-        net_cost = (base_calc * 0.95) * 2.2
-        fitting_fee = 480 if job_type == "Replacement" else 0
-    elif material == "Aluclad Sliding Sash":
-        net_cost = base_calc * 2.5
-        fitting_fee = 480 if job_type == "Replacement" else 0
-    elif material == "Fireproof":
-        net_cost = base_calc * 0.55
-        fitting_fee = 245 if job_type == "Replacement" else 0
-    
-    # Apply €300 floor before fitting fees
-    final_net = max(net_cost, 300.0) + fitting_fee
-    
-    return round(final_net * (1.135 if include_vat else 1.0), 2)
+    if mat == "PVC Standard": 
+        c = unit_base * 0.55
+    elif mat == "Aluclad Standard": 
+        c = unit_base
+        fee = 325 if job == "Replacement" else 0
+    elif mat == "PVC Sliding Sash": 
+        c = (unit_base * 0.60) * 2
+        fee = 438 if job == "Replacement" else 0
+    elif mat == "Hardwood Sliding Sash": 
+        c = (unit_base * 0.95) * 2.2
+        fee = 480 if job == "Replacement" else 0
+    elif mat == "Aluclad Sliding Sash": 
+        c = unit_base * 2.5
+        fee = 480 if job == "Replacement" else 0
+    elif mat == "Fireproof": 
+        c = unit_base * 0.55
+        fee = 245 if job == "Replacement" else 0
+        
+    return round((max(c, 300.0) + fee) * (1.135 if vat else 1), 2)
 
-# --- 3. THE ELEVATION BUILDER (SVG ENGINE) ---
-def build_elevation_svg(w, h, config, op_top, op_bot, op_side):
+# --- 3. TECHNICAL DESIGN ENGINE ---
+def render_elevation(w, h, style, o1, o2):
     """
-    Renders professional technical drawings for customer review and factory specs.
+    Automated CAD-style rendering for Rep/Customer review.
     """
     ratio = w / h
-    c_w = 280 if ratio > 1 else 280 * ratio
-    c_h = 280 if ratio < 1 else 280 / ratio
-    x, y = (320 - c_w)/2, (300 - c_h)/2
+    box_w = 280 if ratio > 1 else 280 * ratio
+    box_h = 280 if ratio < 1 else 280 / ratio
+    x, y = (320 - box_w)/2, (300 - box_h)/2
     
-    def get_op_symbol(px, py, pw, ph, mode):
-        if "Left" in mode: return f'<polyline points="{px+10},{py+ph/2} {px+pw-10},{py+10} {px+pw-10},{py+ph-10} {px+10},{py+ph/2}" fill="none" stroke="red" stroke-width="4"/>'
-        if "Right" in mode: return f'<polyline points="{px+pw-10},{py+ph/2} {px+10},{py+10} {px+10},{py+ph-10} {px+pw-10},{py+ph/2}" fill="none" stroke="red" stroke-width="4"/>'
-        if "Top" in mode: return f'<polyline points="{px+pw/2},{py+10} {px+10},{py+ph-10} {px+pw-10},{py+ph-10} {px+pw/2},{py+10}" fill="none" stroke="red" stroke-width="4"/>'
+    def get_arrow(px, py, pw, ph, mode):
+        if "Left" in mode: return f'<polyline points="{px+10},{py+ph/2} {px+pw-10},{py+10} {px+pw-10},{py+ph-10} {px+10},{py+ph/2}" fill="none" stroke="red" stroke-width="3"/>'
+        if "Right" in mode: return f'<polyline points="{px+pw-10},{py+ph/2} {px+10},{py+10} {px+10},{py+ph-10} {px+pw-10},{py+ph/2}" fill="none" stroke="red" stroke-width="3"/>'
+        if "Top" in mode: return f'<polyline points="{px+pw/2},{py+10} {px+10},{py+ph-10} {px+pw-10},{py+ph-10} {px+pw/2},{py+10}" fill="none" stroke="red" stroke-width="3"/>'
         return ""
 
-    elements = ""
-    if config == "Vertical Sliding Sash":
-        elements += f'<rect x="{x}" y="{y}" width="{c_w}" height="{c_h}" fill="#fcfcfc" stroke="black" stroke-width="8"/>'
-        elements += f'<rect x="{x+8}" y="{y+8}" width="{c_w-16}" height="{c_h/2}" fill="#e3f2fd" stroke="#444" stroke-width="3"/>'
-        elements += f'<rect x="{x+4}" y="{y+c_h/2}" width="{c_w-8}" height="{c_h/2-4}" fill="#e3f2fd" stroke="black" stroke-width="5"/>'
-        # Sash movement arrows
-        elements += f'<path d="M{x-15} {y+c_h*0.8} L{x-15} {y+c_h*0.4} M{x-20} {y+c_h*0.5} L{x-15} {y+c_h*0.4} L{x-10} {y+c_h*0.5}" fill="none" stroke="blue" stroke-width="3"/>'
-    elif config == "Transom (Top over Bottom)":
-        transom_h = c_h * 0.3
-        elements += f'<rect x="{x}" y="{y}" width="{c_w}" height="{transom_h}" fill="#e3f2fd" stroke="black" stroke-width="5"/>'
-        elements += f'<rect x="{x}" y="{y+transom_h}" width="{c_w}" height="{c_h-transom_h}" fill="#e3f2fd" stroke="black" stroke-width="5"/>'
-        elements += get_op_symbol(x, y, c_w, transom_h, op_top) + get_op_symbol(x, y+transom_h, c_w, c_h-transom_h, op_bot)
-    else: # Single/Side Split
-        elements += f'<rect x="{x}" y="{y}" width="{c_w}" height="{c_h}" fill="#e3f2fd" stroke="black" stroke-width="8"/>'
-        elements += get_op_symbol(x, y, c_w, c_h, op_side)
+    frames = ""
+    if style == "Vertical Sash":
+        frames += f'<rect x="{x}" y="{y}" width="{box_w}" height="{box_h}" fill="none" stroke="black" stroke-width="5"/>'
+        frames += f'<rect x="{x+6}" y="{y+6}" width="{box_w-12}" height="{box_h/2}" fill="#e3f2fd" stroke="#444" stroke-width="2"/>'
+        frames += f'<rect x="{x+2}" y="{y+box_h/2}" width="{box_w-4}" height="{box_h/2-2}" fill="#e3f2fd" stroke="black" stroke-width="4"/>'
+    elif style == "Transom (Top/Bottom)":
+        th = box_h * 0.3
+        frames += f'<rect x="{x}" y="{y}" width="{box_w}" height="{th}" fill="#f8f9fa" stroke="black" stroke-width="3"/>'
+        frames += f'<rect x="{x}" y="{y+th}" width="{box_w}" height="{box_h-th}" fill="#f8f9fa" stroke="black" stroke-width="3"/>'
+        frames += get_arrow(x, y, box_w, th, o1) + get_arrow(x, y+th, box_w, box_h-th, o2)
+    else:
+        frames += f'<rect x="{x}" y="{y}" width="{box_w}" height="{box_h}" fill="#f8f9fa" stroke="black" stroke-width="5"/>'
+        frames += get_arrow(x, y, box_w, box_h, o1)
 
-    return f'<div style="background:#fff; border-radius:15px; padding:20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"><svg width="340" height="320">{elements}</svg></div>'
+    return f'<div style="text-align:center;"><svg width="340" height="320" style="background:white; border-radius:12px; padding:10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">{frames}</svg></div>'
 
-# --- 4. DATA MANAGEMENT ---
-if 'projects' not in st.session_state:
-    st.session_state.projects = {}
+# --- 4. SESSION MANAGEMENT ---
+if 'projects' not in st.session_state: st.session_state.projects = {}
 
-# --- 5. SIDEBAR: ENTERPRISE NAVIGATION ---
+# --- 5. SIDEBAR: PROJECT DASHBOARD ---
 with st.sidebar:
-    st.title("🏗️ FIELD-SPEC v4.0")
-    st.caption("Enterprise Survey & CRM Hub")
+    st.title("📂 Site Folders")
+    new_site = st.text_input("Site Address")
+    if st.button("Initialize Folder"):
+        if new_site:
+            st.session_state.projects[new_site] = {"data": [], "status": "Surveying"}
+            st.success(f"{new_site} Created")
     
-    with st.expander("📁 Project Administration", expanded=True):
-        site_name = st.text_input("Site Name")
-        if st.button("Initialize Site Folder"):
-            if site_name:
-                st.session_state.projects[site_name] = {"units": [], "status": "Surveying", "rep": "Admin"}
-                st.success(f"Folder '{site_name}' Ready")
-
-    active_site = st.selectbox("Current Active Project", ["None"] + list(st.session_state.projects.keys()))
+    active_site = st.selectbox("Current Active Project", ["Select Project..."] + list(st.session_state.projects.keys()))
     
-    if active_site != "None":
+    if active_site != "Select Project...":
         st.divider()
-        st.subheader("Order Environment")
-        job_type = st.radio("Standard", ["Replacement", "New Build"])
-        pricing_mode = st.toggle("Include 13.5% VAT", value=True)
-        st.divider()
-        if st.button("Export Fitter Pack (CSV)"):
-            st.info("Generating encrypted data pack...")
+        st.subheader("Global Job Setup")
+        job_type = st.radio("Order Environment", ["Replacement", "New Build"])
+        vat_mode = st.toggle("Price Including VAT (13.5%)", value=True)
 
 # --- 6. MAIN APPLICATION MODULES ---
-if active_site == "None":
-    st.title("Welcome to Pro-Survey Enterprise")
-    st.markdown("""
-    ### System Ready.
-    1. Select a **Site Folder** from the sidebar.
-    2. Input **Survey Dimensions** in Step 1.
-    3. Finalize **Technical Specs** for production.
-    4. Review **Installation Logistics** with your fitter.
-    """)
+if active_site == "Select Project...":
+    st.title("Window Survey Enterprise v5.0")
+    st.info("Select or create a site folder to begin the capture process.")
 else:
-    site_data = st.session_state.projects[active_site]
+    site_db = st.session_state.projects[active_site]
     
-    # DASHBOARD HUD
-    c1, c2, c3, c4 = st.columns(4)
-    total_val = sum(u['price'] for u in site_data['units'])
-    c1.metric("Site Status", site_data['status'])
-    c2.metric("Total Units", len(site_data['units']))
-    c3.metric("Current Quote", f"€{total_val:,.2f}")
-    c4.metric("Avg Unit Price", f"€{round(total_val/len(site_data['units']),2) if site_data['units'] else 0}")
+    # 🛰️ STATUS HUD
+    h1, h2, h3 = st.columns(3)
+    total_val = sum(u['price'] for u in site_db['data'])
+    h1.metric("Units Measured", len(site_db['data']))
+    h2.metric("Quote Total", f"€{total_val:,.2f}")
+    h3.metric("Project Status", site_db['status'])
 
-    tabs = st.tabs(["🏗️ SURVEY & DESIGN", "📊 REP'S DASHBOARD", "🛠️ FITTER'S TECH BRIEF"])
+    tabs = st.tabs(["🏗️ SURVEY INPUT", "🛠️ THE FITTER'S PACK"])
 
-    with tabs[0]: # SURVEY & DESIGN
-        col_form, col_render = st.columns([2, 1])
+    with tabs[0]:
+        col_design, col_preview = st.columns([2, 1])
         
-        with col_form:
+        with col_design:
             with st.container(border=True):
-                st.subheader("1. Elevation & Geometry")
-                cr1, cr2, cr3 = st.columns(3)
-                room_id = cr1.text_input("Room ID", "Kitchen")
-                mat_system = cr2.selectbox("System", ["PVC Standard", "Aluclad Standard", "PVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash", "Fireproof"])
-                lay_config = cr3.selectbox("Layout Mode", ["Single Elevation", "Transom (Top over Bottom)", "Vertical Sliding Sash"])
+                st.subheader("1. Elevation Geometry")
+                r1, r2, r3 = st.columns(3)
+                room = r1.text_input("Room Identifier", "Kitchen")
+                mat = r2.selectbox("Product System", ["PVC Standard", "Aluclad Standard", "PVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash", "Fireproof"])
+                lay = r3.selectbox("Layout Config", ["Single Opening", "Transom (Top/Bottom)", "Vertical Sash"])
                 
-                dim1, dim2, dim3 = st.columns(3)
-                w_mm = dim1.number_input("Width (mm)", 100, 6000, 1200)
-                h_mm = dim2.number_input("Height (mm)", 100, 6000, 1000)
-                finish = dim3.selectbox("Color/Finish", ["White", "Anthracite (7016)", "Black (9005)", "Oak", "Cream"])
+                d1, d2, d3 = st.columns(3)
+                w_mm = d1.number_input("Width (mm)", 100, 6000, 1200)
+                h_mm = d2.number_input("Height (mm)", 100, 6000, 1000)
+                col = d3.selectbox("Finish", ["White", "Anthracite", "Black", "Oak", "Cream"])
 
             with st.container(border=True):
-                st.subheader("2. Opening Configuration")
-                op_t, op_b, op_s = "Fixed", "Fixed", "Fixed"
-                if "Transom" in lay_config:
-                    tc1, tc2 = st.columns(2)
-                    op_t = tc1.selectbox("Fanlight Opening", ["Fixed", "Top Hung"])
-                    op_b = tc2.selectbox("Bottom Opening", ["Fixed", "Side Left", "Side Right"])
-                elif "Single" in lay_config:
-                    op_s = st.selectbox("Opening Direction", ["Fixed", "Side Left", "Side Right", "Top Hung"])
+                st.subheader("2. Opening Style & Hardware")
+                o1, o2 = "Fixed", "Fixed"
+                if lay == "Transom (Top/Bottom)":
+                    oc1, oc2 = st.columns(2)
+                    o1 = oc1.selectbox("Top Pane (Fanlight)", ["Fixed", "Top Hung"])
+                    o2 = oc2.selectbox("Main Bottom", ["Fixed", "Side Left", "Side Right"])
+                elif lay == "Single Opening":
+                    o1 = st.selectbox("Operation Style", ["Fixed", "Side Left", "Side Right", "Top Hung"])
                 
-                extra_sas = st.slider("Additional Opening Sashes", 0, 8, 0)
+                sas_num = st.slider("Total Opening Sashes (Pricing)", 0, 8, 0 if o1 == "Fixed" and o2 == "Fixed" else 1)
 
             with st.container(border=True):
-                st.subheader("3. Factory & Logistics")
-                fc1, fc2, fc3 = st.columns(3)
-                drip_detail = fc1.selectbox("Head Drip", ["Standard Drip", "28mm Drip", "No Drip"])
-                cill_detail = fc2.selectbox("Cill Specification", ["None", "30mm (Stub)", "85mm", "150mm", "180mm"])
-                glass_detail = fc3.selectbox("Glazing Unit", ["Double Glazed", "Triple Glazed", "Acoustic (Sound)", "Toughened Safety"])
-                
-                floor_lvl = st.selectbox("Access Level", ["Ground Floor", "1st Floor", "2nd Floor", "Roof Deck"])
-                access_note = st.text_input("Installer Notes (e.g. 'Narrow Entrance', 'Internal Scaffold Needed')")
+                st.subheader("3. Technical Validation")
+                tc1, tc2, tc3 = st.columns(3)
+                drip = tc1.selectbox("Head Drip Spec", ["Standard Drip", "28mm Drip", "No Drip"])
+                cill = tc2.selectbox("Cill Requirement", ["None", "30mm (Stub)", "85mm", "150mm", "180mm"])
+                glass = tc3.selectbox("Glazing Unit", ["Double Glazed", "Triple Glazed", "Toughened Safety", "Acoustic", "Obscure"])
 
-        with col_render:
-            st.subheader("Design Preview")
-            st.markdown(build_elevation_svg(w_mm, h_mm, lay_config, op_t, op_b, op_s), unsafe_allow_html=True)
+        with col_preview:
+            st.subheader("Elevation Review")
+            st.markdown(render_elevation(w_mm, h_mm, lay, o1, o2), unsafe_allow_html=True)
             
-            st.divider()
-            if st.button("✅ FINALIZE & SYNC TO PROJECT", type="primary"):
-                unit_price = calculate_enterprise_pricing(w_mm, h_mm, extra_sas, mat_system, job_type, pricing_mode)
-                site_data['units'].append({
-                    "room": room_id, "size": f"{w_mm}x{h_mm}", "price": unit_price,
-                    "mat": mat_system, "drip": drip_detail, "cill": cill_detail,
-                    "glass": glass_detail, "floor": floor_lvl, "note": access_note
+            st.subheader("Installer Logistics")
+            floor = st.selectbox("Installation Level", ["Ground Floor", "1st Floor", "2nd Floor", "Roof Level"])
+            access = st.radio("Access Req.", ["Ladder", "Scaffolding", "Cherry Picker"], horizontal=True)
+            note = st.text_area("Site Specific Notes (e.g. 'Narrow Entrance')")
+            
+            if st.button("✅ FINALIZE & SYNC", use_container_width=True, type="primary"):
+                p = get_p(w_mm, h_mm, sas_num, mat, job_type, vat_mode)
+                site_db['data'].append({
+                    "id": len(site_db['data'])+1, "room": room, "size": f"{w_mm}x{h_mm}", "mat": mat,
+                    "price": p, "drip": drip, "cill": cill, "glass": glass, "floor": floor, "access": access, "note": note
                 })
-                st.success("Synchronized with project database.")
                 st.rerun()
 
-    with tabs[1]: # REP'S DASHBOARD
-        st.subheader("Customer Proposal Overview")
-        if site_data['units']:
-            df = pd.DataFrame(site_data['units'])
-            st.dataframe(df[['room', 'size', 'mat', 'price']], use_container_width=True, hide_index=True)
+    with tabs[1]:
+        st.subheader("📋 THE FITTER'S TECHNICAL PACK")
+        st.write("Professional summary for site checking and installation logistics.")
+        
+        if site_db['data']:
+            # Technical Table
+            df = pd.DataFrame(site_db['data'])
+            st.table(df[['room', 'size', 'mat', 'drip', 'cill', 'floor', 'access']])
             
             st.divider()
-            st.write("### 📜 Digital Signature")
-            st.caption("Customer approval for quote value and design elevations.")
-            st.button("Capturing Signature... (Feature Active)")
-        else:
-            st.warning("No units surveyed yet.")
-
-    with tabs[2]: # FITTER'S TECH BRIEF
-        st.subheader("Installation Logistics Hub")
-        if site_data['units']:
-            for i, u in enumerate(site_data['units']):
-                with st.expander(f"UNIT {i+1}: {u['room']} - {u['size']}"):
-                    c_fit1, c_fit2 = st.columns(2)
-                    with c_fit1:
-                        st.markdown(f"**Material:** {u['mat']}")
-                        st.markdown(f"**Drip Detail:** {u['drip']}")
-                        st.markdown(f"**Cill Depth:** {u['cill']}")
-                    with c_fit2:
-                        st.markdown(f"**Access Level:** {u['floor']}")
-                        st.markdown(f"**Glass:** {u['glass']}")
-                    st.markdown(f"<div class='fitter-note'><b>Fitter Note:</b> {u['note']}</div>", unsafe_allow_html=True)
-        else:
-            st.warning("Awaiting survey data for fitter brief.")
+            st.subheader("Quote Breakdown")
+            st.table(df[['room', 'size', 'price']])
+            st.metric("GRAND TOTAL VALUE", f"€{total_val:,.2f}")
+            
+            if st.button("🗑️ RESET PROJECT"):
+                site_db['data'] = []
+                st.rerun()
