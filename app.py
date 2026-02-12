@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
 
-# --- PRICING ENGINE (Kept your specific 2026 rules) ---
+# --- 1. THE PRICING ENGINE (Locked to 2026 Tiers) ---
 def get_p(w, h, sas, mat, job, vat):
-    area = (w * h) / 1e6
+    area = (w * h) / 1000000
+    # Tiered Base Rates
     if area < 0.6: b = 698
     elif area < 0.8: b = 652
     elif area < 1.0: b = 501
@@ -17,73 +18,73 @@ def get_p(w, h, sas, mat, job, vat):
     elif area < 4.5: b = 291
     else: b = 277
     
-    u = b + (sas * 80)
+    unit_base = b + (sas * 80)
     c, f = 0, 0
-    if mat == "PVC Standard": c = u * 0.55
-    elif mat == "Aluclad Standard": c = u; f = 325 if job == "Replacement" else 0
-    elif mat == "PVC Sliding Sash": c = (u * 0.6) * 2; f = 438 if job == "Replacement" else 0
-    elif mat == "Hardwood Sliding Sash": c = (u * 0.95) * 2.2; f = 480 if job == "Replacement" else 0
-    elif mat == "Aluclad Sliding Sash": c = u * 2.5; f = 480 if job == "Replacement" else 0
-    elif mat == "Fireproof": c = u * 0.55; f = 245 if job == "Replacement" else 0
+    # Replacement logic and multipliers
+    if mat == "PVC Standard": c = unit_base * 0.55
+    elif mat == "Aluclad Standard": c = unit_base; f = 325 if job == "Replacement" else 0
+    elif mat == "PVC Sliding Sash": c = (unit_base * 0.60) * 2; f = 438 if job == "Replacement" else 0
+    elif mat == "Hardwood Sliding Sash": c = (unit_base * 0.95) * 2.2; f = 480 if job == "Replacement" else 0
+    elif mat == "Aluclad Sliding Sash": c = unit_base * 2.5; f = 480 if job == "Replacement" else 0
+    elif mat == "Fireproof": c = unit_base * 0.55; f = 245 if job == "Replacement" else 0
     
-    final = max(c, 300.0) + f
-    return round(final * (1.135 if vat else 1), 2)
+    final_ex = max(c, 300.0) + f
+    return round(final_ex * (1.135 if vat else 1), 2)
 
-# --- APP LAYOUT ---
-st.set_page_config(page_title="Pro Survey 3.0", layout="wide")
+# --- 2. THE VISUAL ENGINE ---
+def draw_win(w, h, lay, s1, s2):
+    r = w / h
+    bw = 260 if r > 1 else 260 * r
+    bh = 260 if r < 1 else 260 / r
+    x, y = (300 - bw)/2, (300 - bh)/2
+    
+    def sym(px, py, pw, ph, mode):
+        if "Left" in mode: return f'<polyline points="{px+5},{py+ph/2} {px+pw-5},{py+5} {px+pw-5},{py+ph-5} {px+5},{py+ph/2}" fill="none" stroke="red" stroke-width="2"/>'
+        if "Right" in mode: return f'<polyline points="{px+pw-5},{py+ph/2} {px+5},{py+5} {px+5},{py+ph-5} {px+pw-5},{py+ph/2}" fill="none" stroke="red" stroke-width="2"/>'
+        if "Top" in mode: return f'<polyline points="{px+pw/2},{py+5} {px+5},{py+ph-5} {px+pw-5},{py+ph-5} {px+pw/2},{py+5}" fill="none" stroke="red" stroke-width="2"/>'
+        return ""
 
+    frames = ""
+    if "Sash" in lay:
+        frames += f'<rect x="{x}" y="{y}" width="{bw}" height="{bh}" fill="none" stroke="black" stroke-width="4"/>'
+        frames += f'<rect x="{x+4}" y="{y+4}" width="{bw-8}" height="{bh/2}" fill="#f8f9fa" stroke="black" stroke-width="2"/>'
+        frames += f'<rect x="{x+2}" y="{y+bh/2}" width="{bw-4}" height="{bh/2-2}" fill="#f8f9fa" stroke="black" stroke-width="3"/>'
+        frames += f'<line x1="{x+bw+10}" y1="{y+bh*0.2}" x2="{x+bw+10}" y2="{y+bh*0.4}" stroke="blue" stroke-width="2"/>'
+    elif "Transom" in lay:
+        th = bh * 0.3
+        frames += f'<rect x="{x}" y="{y}" width="{bw}" height="{th}" fill="#f8f9fa" stroke="black" stroke-width="3"/>'
+        frames += f'<rect x="{x}" y="{y+th}" width="{bw}" height="{bh-th}" fill="#f8f9fa" stroke="black" stroke-width="3"/>'
+        frames += sym(x, y, bw, th, s1) + sym(x, y+th, bw, bh-th, s2)
+    else:
+        frames += f'<rect x="{x}" y="{y}" width="{bw}" height="{bh}" fill="#f8f9fa" stroke="black" stroke-width="4"/>'
+        frames += sym(x, y, bw, bh, s1)
+
+    st.write(f'<div style="display:flex;justify-content:center;"><svg width="320" height="300">{frames}</svg></div>', unsafe_allow_html=True)
+
+# --- 3. APP INTERFACE ---
+st.set_page_config(page_title="Pro Survey 3.5", layout="wide")
 if 'db' not in st.session_state: st.session_state.db = {}
 
-st.sidebar.title("🛠 Site Admin")
-site_n = st.sidebar.text_input("Site Name/Address")
-if st.sidebar.button("Add Site"): st.session_state.db[site_n] = []
-
+st.sidebar.title("🛠 Site Folder")
+site_n = st.sidebar.text_input("Site Address")
+if st.sidebar.button("Create Site"): st.session_state.db[site_n] = []
 sel = st.sidebar.selectbox("Active Project", ["Select..."] + list(st.session_state.db.keys()))
 
 if sel != "Select...":
-    # Sidebar Logistics
-    job_m = st.sidebar.radio("Job Type", ["New Build", "Replacement"])
-    vat_m = st.sidebar.toggle("Include VAT", True)
+    job_m = st.sidebar.radio("Job Mode", ["New Build", "Replacement"])
+    vat_m = st.sidebar.toggle("Include VAT (13.5%)", True)
     
     st.header(f"Surveying: {sel}")
     
-    with st.expander("📝 Step 1: Window Dimensions & Style", expanded=True):
-        c1, c2, c3 = st.columns(3)
-        room = c1.selectbox("Room", ["Kitchen", "Living", "Dining", "Master Bed", "Ensuite", "Hall", "Garage"])
-        mat = c2.selectbox("Product", ["PVC Standard", "Aluclad Standard", "PVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash", "Fireproof"])
-        col = c3.selectbox("Finish", ["White", "Anthracite", "Black", "Oak", "Cream"])
-        
-        c4, c5, c6 = st.columns(3)
-        w = c4.number_input("Width (mm)", 100, 5000, 1200)
-        h = c5.number_input("Height (mm)", 100, 5000, 1000)
-        sas = c6.number_input("Opening Sashes", 0, 10, 0)
-
-    with st.expander("⚙️ Step 2: Technical Specs (Factory Ready)"):
-        tc1, tc2, tc3 = st.columns(3)
-        glass = tc1.selectbox("Glass Type", ["Standard Double", "Standard Triple", "Toughened Safety", "Acoustic (Soundproof)", "Obscure/Frosted"])
-        cill = tc2.selectbox("Cill Required", ["None", "30mm (Stub)", "85mm", "150mm", "180mm"])
-        vent = tc3.selectbox("Tricklevents", ["None", "2500mm2", "5000mm2"])
-        
-        restrict = st.toggle("Add Child Safety Restrictors")
-        pole = st.toggle("Add Pole-and-Hook (for high windows)")
-
-    with st.expander("🏗 Step 3: Site Logistics (Installer Ready)"):
-        lc1, lc2 = st.columns(2)
-        floor = lc1.selectbox("Floor Level", ["Ground Floor", "1st Floor", "2nd Floor", "High Access"])
-        access = lc2.selectbox("Access", ["Standard Ladder", "Scaffold Required", "Cherry Picker", "Internal Fit Only"])
-        notes = st.text_area("Site Notes (e.g., 'Brickwork unstable', 'Wires overhead')")
-
-    if st.button("💾 Finalize & Save Window", use_container_width=True):
-        price = get_p(w, h, sas, mat, job_m, vat_m)
-        st.session_state.db[sel].append({
-            "Room": room, "Size": f"{w}x{h}", "Material": mat, "Price": price, "Glass": glass, "Floor": floor
-        })
-        st.success(f"Saved! Unit Price: €{price}")
-
-    if st.session_state.db[sel]:
-        st.divider()
-        st.subheader("Window Schedule")
-        st.table(pd.DataFrame(st.session_state.db[sel]))
-        
-        total_val = sum(x['Price'] for x in st.session_state.db[sel])
-        st.metric("Total Order Value", f"€{total_val:,.2f}")
+    t1, t2 = st.tabs(["🛠 Survey Entry", "📜 Quote Summary"])
+    
+    with t1:
+        with st.expander("1. Dimensions & Elevation", expanded=True):
+            c1, c2, c3 = st.columns(3)
+            room = c1.text_input("Room Name", "Kitchen")
+            mat = c2.selectbox("Product", ["PVC Standard", "Aluclad Standard", "PVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash", "Fireproof"])
+            lay = c3.selectbox("Layout", ["Single", "Vertical Slider (Sash)", "Transom (Top over Bottom)"])
+            
+            c4, c5, c6 = st.columns(3)
+            w = c4.number_input("Width (mm)", 100, 5000, 1200)
+            h
