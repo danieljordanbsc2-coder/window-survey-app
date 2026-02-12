@@ -11,6 +11,8 @@ st.set_page_config(page_title="Window Survey Pro", layout="centered")
 # --- PRICING LOGIC ---
 def get_pricing(w, h, sashes, material, job_type, include_vat):
     area = (w * h) / 1000000
+    
+    # 1. Base List Price Tiers
     if area < 0.6: base = 698
     elif area < 0.8: base = 652
     elif area < 1.0: base = 501
@@ -27,8 +29,9 @@ def get_pricing(w, h, sashes, material, job_type, include_vat):
     window_unit = base + (sashes * 80)
     replacement_fee = 0
     
+    # 2. Material & Sash Logic
     if material == "PVC Standard":
-        window_unit *= 0.55
+        window_unit *= 0.55 # 45% Discount
     elif material == "Aluclad Standard":
         window_unit *= 1.0
         if job_type == "Replacement": replacement_fee = 325
@@ -45,6 +48,7 @@ def get_pricing(w, h, sashes, material, job_type, include_vat):
         window_unit *= 0.55
         if job_type == "Replacement": replacement_fee = 245
 
+    # 3. Floor (€300 ex vat)
     final_ex_vat = max(window_unit, 300.0) + replacement_fee
     return round(final_ex_vat * 1.135, 2) if include_vat else round(final_ex_vat, 2)
 
@@ -60,80 +64,102 @@ def create_frame_bg(w, h):
     draw.rectangle([x0, y0, x0 + box_w, y0 + box_h], outline="black", width=4)
     return bg
 
+# --- VERIFICATION IMAGE ---
+def create_ver_img(name, data, sig=None):
+    b_h, h_h, c_w = 450, 200, 900
+    total_h = (b_h * len(data)) + h_h + (300 if sig is not None else 0)
+    img = Image.new('RGB', (c_w, total_h), 'white')
+    draw = ImageDraw.Draw(img)
+    draw.text((40, 40), f"VERIFICATION: {name.upper()}", fill="black")
+    y = h_h
+    for item in data:
+        if item["Sketch"] is not None:
+            sk_a = np.array(item["Sketch"]).astype('uint8')
+            sk = Image.fromarray(sk_a).convert("RGB")
+            sk.thumbnail((350, 350))
+            img.paste(sk, (40, y))
+        draw.text((420, y+50), f"ROOM: {item['Room']}", fill="black")
+        draw.text((420, y+100), f"PRODUCT: {item['Material']}", fill="black")
+        draw.text((420, y+150), f"SIZE: {item['Size']}", fill="black")
+        y += b_h
+    if sig is not None:
+        draw.text((40, y), "SIGNATURE:", fill="black")
+        s_img = Image.fromarray(np.array(sig).astype('uint8')).convert("RGB")
+        s_img.thumbnail((700, 200))
+        img.paste(s_img, (40, y+50))
+    return img
+
 # --- SESSION STATE ---
-if 'db' not in st.session_state: st.session_state.db = {}
-if 'signatures' not in st.session_state: st.session_state.signatures = {}
-if 'edit_index' not in st.session_state: st.session_state.edit_index = None
-if 'view_mode' not in st.session_state: st.session_state.view_mode = "Survey"
-if 'form_count' not in st.session_state: st.session_state.form_count = 0
+for key in ['db', 'sigs', 'view_mode', 'form_count']:
+    if key not in st.session_state:
+        if key == 'db': st.session_state[key] = {}
+        elif key == 'sigs': st.session_state[key] = {}
+        elif key == 'view_mode': st.session_state[key] = "Survey"
+        else: st.session_state[key] = 0
+if 'edit_idx' not in st.session_state: st.session_state.edit_idx = None
 
-# --- SIDEBAR: SITE MANAGEMENT ---
+# --- SIDEBAR ---
 st.sidebar.title("📁 Site Management")
+with st.sidebar.expander("➕ Add New Site"):
+    n_a = st.text_input("Site Name")
+    if st.button("Create Site"):
+        if n_a: st.session_state.db[n_a] = []; st.rerun()
 
-# 1. Option to create a new site
-with st.sidebar.expander("➕ Add New Site", expanded=len(st.session_state.db) == 0):
-    new_addr = st.text_input("Site Address / Name")
-    if st.button("Create Site Folder"):
-        if new_addr and new_addr not in st.session_state.db:
-            st.session_state.db[new_addr] = []
-            st.sidebar.success(f"Created: {new_addr}")
-            st.rerun()
+sites = list(st.session_state.db.keys())
+sel_site = st.sidebar.selectbox("Open Site", options=["Select..."] + sites)
 
-# 2. Dropdown to select existing site
-site_list = list(st.session_state.db.keys())
-selected_client = st.sidebar.selectbox("Open Site Folder", options=["Select a site..."] + site_list)
-
-# --- MAIN CONTENT ---
-if selected_client != "Select a site...":
+# --- MAIN APP ---
+if sel_site != "Select...":
     st.sidebar.divider()
-    job_type = st.sidebar.radio("Job Type", ["New Build", "Replacement"])
-    vat_mode = st.sidebar.toggle("Include 13.5% VAT", value=True)
-    
-    col_nav1, col_nav2 = st.sidebar.columns(2)
-    if col_nav1.button("🛠 Survey"): st.session_state.view_mode = "Survey"; st.rerun()
-    if col_nav2.button("📜 Quote"): st.session_state.view_mode = "Quote"; st.rerun()
+    job = st.sidebar.radio("Job", ["New Build", "Replacement"])
+    vat = st.sidebar.toggle("Inc 13.5% VAT", value=True)
+    if st.sidebar.button("🛠 Survey"): st.session_state.view_mode = "Survey"; st.rerun()
+    if st.sidebar.button("📜 Quote"): st.session_state.view_mode = "Quote"; st.rerun()
 
     if st.session_state.view_mode == "Survey":
-        edit_idx = st.session_state.edit_index
-        is_editing = edit_idx is not None
-        curr = st.session_state.db[selected_client][edit_idx] if is_editing else None
+        e_i = st.session_state.edit_idx
+        is_e = e_i is not None
+        curr = st.session_state.db[sel_site][e_i] if is_e else None
+        st.title(f"{'Edit' if is_e else 'Survey'}: {sel_site}")
 
-        st.title(f"{'✏️ Edit Window' if is_editing else '📋 Site Survey'}")
-        st.caption(f"Address: {selected_client}")
-        
-        with st.form(key=f"survey_form_{st.session_state.form_count}", clear_on_submit=True):
-            room = st.text_input("Room (e.g. Kitchen)", value=curr["Room"] if is_editing else "")
-            prod = st.selectbox("Product Type", ["PVC Standard", "Aluclad Standard", "PVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash", "Fireproof"], 
-                               index=0 if not is_editing else ["PVC Standard", "Aluclad Standard", "PVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash", "Fireproof"].index(curr["Material"]))
+        with st.form(key=f"sf_{st.session_state.form_count}", clear_on_submit=True):
+            room = st.text_input("Room", value=curr["Room"] if is_e else "")
+            prod = st.selectbox("Product", ["PVC Standard", "Aluclad Standard", "PVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash", "Fireproof"], 
+                               index=0 if not is_e else ["PVC Standard", "Aluclad Standard", "PVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash", "Fireproof"].index(curr["Material"]))
+            w = st.number_input("Width (mm)", value=int(curr["Size"].split('x')[0]) if is_e else 1200)
+            h = st.number_input("Height (mm)", value=int(curr["Size"].split('x')[1]) if is_e else 1000)
+            sas = st.number_input("Openers", value=curr.get("Sashes", 0) if is_e else 0)
+            col = st.selectbox("Colour", ["White", "Anthracite", "Black", "Oak", "Cream"])
             
-            c_w, c_h = st.columns(2)
-            with c_w: w = st.number_input("Width (mm)", value=int(curr["Size"].split('x')[0]) if is_editing else 1200)
-            with c_h: h = st.number_input("Height (mm)", value=int(curr["Size"].split('x')[1]) if is_editing else 1000)
-            
-            c_s, c_g, c_c = st.columns(3)
-            with c_s: sashes = st.number_input("Openers", value=curr.get("Sashes", 0) if is_editing else 0)
-            with c_g: glazing = st.selectbox("Glazing", ["Double", "Triple"], index=0 if not is_editing else ["Double", "Triple"].index(curr.get("Glazing", "Double")))
-            with c_c: color = st.selectbox("Colour", ["White", "Anthracite", "Black", "Oak", "Cream"], index=0 if not is_editing else ["White", "Anthracite", "Black", "Oak", "Cream"].index(curr.get("Colour", "White")))
-            
-            st.write(f"**Sketch Design:**")
-            frame_bg = create_frame_bg(w, h)
-            canvas = st_canvas(stroke_width=3, stroke_color="#000000", background_image=frame_bg, height=300, width=300, drawing_mode="freedraw", key=f"canv_{w}_{h}_{st.session_state.form_count}")
+            st.write(f"**Sketch inside {w}x{h} Frame:**")
+            canvas = st_canvas(stroke_width=3, stroke_color="black", background_image=create_frame_bg(w,h), height=300, width=300, key=f"c_{w}_{h}_{st.session_state.form_count}")
 
-            if st.form_submit_button("Save Window Details"):
-                price = get_pricing(w, h, sashes, prod, job_type, vat_mode)
-                entry = {"Room": room, "Material": prod, "Design": prod.split()[-1], "Size": f"{w}x{h}", "Sashes": sashes, "Glazing": glazing, "Colour": color, "Price": price, "Sketch": canvas.image_data}
-                if is_editing:
-                    st.session_state.db[selected_client][edit_idx] = entry
-                    st.session_state.edit_index = None
-                else:
-                    st.session_state.db[selected_client].append(entry)
-                st.session_state.form_count += 1
-                st.rerun()
+            if st.form_submit_button("Save Window"):
+                p = get_pricing(w, h, sas, prod, job, vat)
+                entry = {"Room": room, "Material": prod, "Size": f"{w}x{h}", "Sashes": sas, "Colour": col, "Price": p, "Sketch": canvas.image_data}
+                if is_e: st.session_state.db[sel_site][e_i] = entry; st.session_state.edit_idx = None
+                else: st.session_state.db[sel_site].append(entry)
+                st.session_state.form_count += 1; st.rerun()
 
-        # Display list of windows
         st.divider()
-        for i, item in enumerate(st.session_state.db[selected_client]):
+        for i, itm in enumerate(st.session_state.db[sel_site]):
             with st.container(border=True):
-                c_img, c_txt, c_btn = st.columns([1, 2, 1])
-                with c_img:
-                    if item["
+                c1, c2, c3 = st.columns([1, 2, 1])
+                with c1: st.image(itm["Sketch"], width=70) if itm["Sketch"] is not None else None
+                with c2: st.write(f"**{itm['Room']}** - €{itm['Price']:,}")
+                with c3:
+                    if st.button("✏️", key=f"ed_{i}"): st.session_state.edit_idx = i; st.rerun()
+                    if st.button("🗑", key=f"dl_{i}"): st.session_state.db[sel_site].pop(i); st.rerun()
+
+    elif st.session_state.view_mode == "Quote":
+        st.title(f"Quote: {sel_site}")
+        items = st.session_state.db[sel_site]
+        total = sum([x['Price'] for x in items])
+        st.subheader(f"Total: €{total:,.2f}")
+        
+        st.write("--- Signature ---")
+        sig_c = st_canvas(stroke_width=2, stroke_color="black", height=150, width=500, key="spad")
+        if st.button("Save Signature"): st.session_state.sigs[sel_site] = sig_c.image_data; st.success("Signed!")
+        
+        if st.button("Download Verification Image"):
+            v_img = create_ver
