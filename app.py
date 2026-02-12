@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-# --- PRICING ENGINE ---
+# --- PRICING ENGINE (Kept your specific 2026 rules) ---
 def get_p(w, h, sas, mat, job, vat):
     area = (w * h) / 1e6
     if area < 0.6: b = 698
@@ -26,101 +26,64 @@ def get_p(w, h, sas, mat, job, vat):
     elif mat == "Aluclad Sliding Sash": c = u * 2.5; f = 480 if job == "Replacement" else 0
     elif mat == "Fireproof": c = u * 0.55; f = 245 if job == "Replacement" else 0
     
-    return round((max(c, 300.0) + f) * (1.135 if vat else 1), 2)
+    final = max(c, 300.0) + f
+    return round(final * (1.135 if vat else 1), 2)
 
-# --- PRO-SPEC SVG RENDERER ---
-def draw_pro_win(w, h, layout, op1, op2, op3):
-    r = w / h
-    bw = 260 if r > 1 else 260 * r
-    bh = 260 if r < 1 else 260 / r
-    x, y = (300 - bw)/2, (300 - bh)/2
-    
-    def get_sym(pane_x, pane_y, pane_w, pane_h, style):
-        if "Left" in style: return f'<polyline points="{pane_x+5},{pane_y+pane_h/2} {pane_x+pane_w-5},{pane_y+5} {pane_x+pane_w-5},{pane_y+pane_h-5} {pane_x+5},{pane_y+pane_h/2}" fill="none" stroke="red" stroke-width="2"/>'
-        if "Right" in style: return f'<polyline points="{pane_x+pane_w-5},{pane_y+pane_h/2} {pane_x+5},{pane_y+5} {pane_x+5},{pane_y+pane_h-5} {pane_x+pane_w-5},{pane_y+pane_h/2}" fill="none" stroke="red" stroke-width="2"/>'
-        if "Top" in style: return f'<polyline points="{pane_x+pane_w/2},{pane_y+5} {pane_x+5},{pane_y+pane_h-5} {pane_x+pane_w-5},{pane_y+pane_h-5} {pane_x+pane_w/2},{pane_y+5}" fill="none" stroke="red" stroke-width="2"/>'
-        return ""
+# --- APP LAYOUT ---
+st.set_page_config(page_title="Pro Survey 3.0", layout="wide")
 
-    panes = ""
-    if layout == "Single":
-        panes += f'<rect x="{x}" y="{y}" width="{bw}" height="{bh}" fill="#f8f9fa" stroke="black" stroke-width="6"/>'
-        panes += get_sym(x, y, bw, bh, op1)
-    elif layout == "Double Split":
-        panes += f'<rect x="{x}" y="{y}" width="{bw/2}" height="{bh}" fill="#f8f9fa" stroke="black" stroke-width="6"/>'
-        panes += f'<rect x="{x+bw/2}" y="{y}" width="{bw/2}" height="{bh}" fill="#f8f9fa" stroke="black" stroke-width="6"/>'
-        panes += get_sym(x, y, bw/2, bh, op1)
-        panes += get_sym(x+bw/2, y, bw/2, bh, op2)
-    elif layout == "Triple Split":
-        panes += f'<rect x="{x}" y="{y}" width="{bw/3}" height="{bh}" fill="#f8f9fa" stroke="black" stroke-width="6"/>'
-        panes += f'<rect x="{x+bw/3}" y="{y}" width="{bw/3}" height="{bh}" fill="#f8f9fa" stroke="black" stroke-width="6"/>'
-        panes += f'<rect x="{x+2*bw/3}" y="{y}" width="{bw/3}" height="{bh}" fill="#f8f9fa" stroke="black" stroke-width="6"/>'
-        panes += get_sym(x, y, bw/3, bh, op1)
-        panes += get_sym(x+bw/3, y, bw/3, bh, op2)
-        panes += get_sym(x+2*bw/3, y, bw/3, bh, op3)
-    elif layout == "Top Fanlight":
-        panes += f'<rect x="{x}" y="{y}" width="{bw}" height="{bh*0.3}" fill="#f8f9fa" stroke="black" stroke-width="6"/>'
-        panes += f'<rect x="{x}" y="{y+bh*0.3}" width="{bw}" height="{bh*0.7}" fill="#f8f9fa" stroke="black" stroke-width="6"/>'
-        panes += get_sym(x, y, bw, bh*0.3, op1)
-        panes += get_sym(x, y+bh*0.3, bw, bh*0.7, op2)
-
-    svg = f'<svg width="300" height="300">{panes}</svg>'
-    st.write(f'<div style="display:flex;justify-content:center;">{svg}</div>', unsafe_allow_html=True)
-
-# --- APP SETUP ---
 if 'db' not in st.session_state: st.session_state.db = {}
 
-st.sidebar.title("Survey Pro 2.0")
-site_addr = st.sidebar.text_input("Site Address")
-if st.sidebar.button("Create Site"): st.session_state.db[site_addr] = []
+st.sidebar.title("🛠 Site Admin")
+site_n = st.sidebar.text_input("Site Name/Address")
+if st.sidebar.button("Add Site"): st.session_state.db[site_n] = []
 
 sel = st.sidebar.selectbox("Active Project", ["Select..."] + list(st.session_state.db.keys()))
 
 if sel != "Select...":
-    job = st.sidebar.radio("Job Mode", ["New Build", "Replacement"])
-    vat = st.sidebar.toggle("Inc 13.5% VAT", True)
+    # Sidebar Logistics
+    job_m = st.sidebar.radio("Job Type", ["New Build", "Replacement"])
+    vat_m = st.sidebar.toggle("Include VAT", True)
     
-    st.header(f"Site: {sel}")
+    st.header(f"Surveying: {sel}")
     
-    with st.expander("➕ Configure Window", expanded=True):
-        room = st.selectbox("Room", ["Kitchen", "Living", "Master Bed", "Ensuite", "Hall", "Other"])
-        mat = st.selectbox("Product", ["PVC Standard", "Aluclad Standard", "PVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash", "Fireproof"])
+    with st.expander("📝 Step 1: Window Dimensions & Style", expanded=True):
+        c1, c2, c3 = st.columns(3)
+        room = c1.selectbox("Room", ["Kitchen", "Living", "Dining", "Master Bed", "Ensuite", "Hall", "Garage"])
+        mat = c2.selectbox("Product", ["PVC Standard", "Aluclad Standard", "PVC Sliding Sash", "Hardwood Sliding Sash", "Aluclad Sliding Sash", "Fireproof"])
+        col = c3.selectbox("Finish", ["White", "Anthracite", "Black", "Oak", "Cream"])
         
-        c1, c2 = st.columns(2)
-        w = c1.number_input("Width (mm)", 100, 5000, 1200)
-        h = c2.number_input("Height (mm)", 100, 4000, 1000)
-        
-        lay = st.selectbox("Window Layout", ["Single", "Double Split", "Triple Split", "Top Fanlight"])
-        
-        o1, o2, o3 = "Fixed", "Fixed", "Fixed"
-        if lay == "Single":
-            o1 = st.selectbox("Opening", ["Fixed", "Side Left", "Side Right", "Top Hung"])
-        elif lay == "Double Split":
-            col1, col2 = st.columns(2)
-            o1 = col1.selectbox("Left Pane", ["Fixed", "Side Left", "Side Right", "Top Hung"])
-            o2 = col2.selectbox("Right Pane", ["Fixed", "Side Left", "Side Right", "Top Hung"])
-        elif lay == "Triple Split":
-            col1, col2, col3 = st.columns(3)
-            o1 = col1.selectbox("Left", ["Fixed", "Side Left", "Top Hung"])
-            o2 = col2.selectbox("Mid", ["Fixed", "Side Left", "Top Hung"])
-            o3 = col3.selectbox("Right", ["Fixed", "Side Right", "Top Hung"])
-        elif lay == "Top Fanlight":
-            col1, col2 = st.columns(2)
-            o1 = col1.selectbox("Top Pane", ["Fixed", "Top Hung"])
-            o2 = col2.selectbox("Bottom Pane", ["Fixed", "Side Left", "Side Right"])
+        c4, c5, c6 = st.columns(3)
+        w = c4.number_input("Width (mm)", 100, 5000, 1200)
+        h = c5.number_input("Height (mm)", 100, 5000, 1000)
+        sas = c6.number_input("Opening Sashes", 0, 10, 0)
 
-        draw_pro_win(w, h, lay, o1, o2, o3)
+    with st.expander("⚙️ Step 2: Technical Specs (Factory Ready)"):
+        tc1, tc2, tc3 = st.columns(3)
+        glass = tc1.selectbox("Glass Type", ["Standard Double", "Standard Triple", "Toughened Safety", "Acoustic (Soundproof)", "Obscure/Frosted"])
+        cill = tc2.selectbox("Cill Required", ["None", "30mm (Stub)", "85mm", "150mm", "180mm"])
+        vent = tc3.selectbox("Tricklevents", ["None", "2500mm2", "5000mm2"])
         
-        col = st.selectbox("Colour", ["White", "Anthracite", "Black", "Oak", "Cream"])
-        
-        if st.button("💾 Save Window", use_container_width=True):
-            sas = sum(1 for o in [o1, o2, o3] if o != "Fixed")
-            p = get_p(w, h, sas, mat, job, vat)
-            st.session_state.db[sel].append({"Room": room, "Size": f"{w}x{h}", "Layout": lay, "Price": p})
-            st.rerun()
+        restrict = st.toggle("Add Child Safety Restrictors")
+        pole = st.toggle("Add Pole-and-Hook (for high windows)")
+
+    with st.expander("🏗 Step 3: Site Logistics (Installer Ready)"):
+        lc1, lc2 = st.columns(2)
+        floor = lc1.selectbox("Floor Level", ["Ground Floor", "1st Floor", "2nd Floor", "High Access"])
+        access = lc2.selectbox("Access", ["Standard Ladder", "Scaffold Required", "Cherry Picker", "Internal Fit Only"])
+        notes = st.text_area("Site Notes (e.g., 'Brickwork unstable', 'Wires overhead')")
+
+    if st.button("💾 Finalize & Save Window", use_container_width=True):
+        price = get_p(w, h, sas, mat, job_m, vat_m)
+        st.session_state.db[sel].append({
+            "Room": room, "Size": f"{w}x{h}", "Material": mat, "Price": price, "Glass": glass, "Floor": floor
+        })
+        st.success(f"Saved! Unit Price: €{price}")
 
     if st.session_state.db[sel]:
         st.divider()
         st.subheader("Window Schedule")
-        df = pd.DataFrame(st.session_state.db[sel])
-        st.dataframe(df, hide_index=True)
-        st.metric("Total Quote", f"€{df['Price'].sum():,.2f}")
+        st.table(pd.DataFrame(st.session_state.db[sel]))
+        
+        total_val = sum(x['Price'] for x in st.session_state.db[sel])
+        st.metric("Total Order Value", f"€{total_val:,.2f}")
